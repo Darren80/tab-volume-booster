@@ -8,7 +8,7 @@ const api = typeof browser !== "undefined" ? browser : chrome;
 // These are only *fallbacks*. The real range is owned by the content script's
 // SETTINGS.volume block (content.js) and arrives via get-state, so the slider is
 // sized from one source. Change the ceiling there, not here.
-let MAX = 600; // max volume %
+let MAX = 1200; // max volume %
 let MIN = 0; // min volume %
 let DEFAULT = 100; // "normal"/reset volume %
 

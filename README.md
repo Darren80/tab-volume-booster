@@ -1,7 +1,7 @@
 # Tab Volume Booster
 
 A Firefox extension that controls the volume of the current tab with a slider
-(0–600 %), plus **Voice boost** and **Bass boost** presets. Nudge the volume
+(0–1200 %), plus **Voice boost** and **Bass boost** presets. Nudge the volume
 with the arrow keys, and jump to any tab currently playing audio with one click.
 
 It's a Firefox re-build of the idea behind Chrome's "Volume Master".
@@ -18,7 +18,7 @@ extension boosts audio the WebExtension-native way:
   media element -> lowshelf (bass) -> peaking (voice) -> GainNode -> speakers
   ```
 
-- The `GainNode` gives 0–600 % volume; the two `BiquadFilter`s power the
+- The `GainNode` gives 0–1200 % volume; the two `BiquadFilter`s power the
   Voice/Bass presets.
 - The graph is only engaged once you actually change something, so pages sound
   100 % native until then.
