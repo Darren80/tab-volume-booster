@@ -21,7 +21,6 @@ const slider = document.getElementById("volume");
 const readout = document.getElementById("volumeReadout");
 const resetButton = document.getElementById("reset");
 const presetButtons = [...document.querySelectorAll(".preset")];
-const tabsEmpty = document.getElementById("tabsEmpty");
 const tabsList = document.getElementById("tabsList");
 const statusHint = document.getElementById("statusHint");
 const stars = document.getElementById("stars");
@@ -103,47 +102,39 @@ async function send(message) {
   }
 }
 
-// --- Audible tabs list --------------------------------------------------
+// --- Now-playing row ----------------------------------------------------
+// We surface a single row for the CURRENT tab, and only while it's actually
+// making sound. (Listing other audible tabs to jump between them added clutter
+// for little value — the popup already acts on the tab you're looking at.)
 
-async function renderAudibleTabs() {
-  const tabs = await api.tabs.query({ audible: true });
+async function renderNowPlaying() {
   tabsList.innerHTML = "";
 
-  if (!tabs.length) {
-    tabsEmpty.hidden = false;
-    tabsList.hidden = true;
+  const [tab] = await api.tabs.query({
+    active: true,
+    currentWindow: true,
+    audible: true,
+  });
+  if (!tab) {
+    tabsList.hidden = true; // this tab is silent — show nothing at all
     return;
   }
 
-  tabsEmpty.hidden = true;
+  const li = document.createElement("li");
+  li.className = "tab-item current";
+
+  const icon = document.createElement("img");
+  icon.src = tab.favIconUrl || "";
+  icon.alt = "";
+  icon.addEventListener("error", () => (icon.style.visibility = "hidden"));
+
+  const title = document.createElement("span");
+  title.className = "tab-title";
+  title.textContent = tab.title || tab.url || "This tab";
+
+  li.append(icon, title);
+  tabsList.appendChild(li);
   tabsList.hidden = false;
-
-  for (const tab of tabs) {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.className = "tab-item" + (tab.id === activeTabId ? " current" : "");
-
-    const icon = document.createElement("img");
-    icon.src = tab.favIconUrl || "";
-    icon.alt = "";
-    icon.addEventListener("error", () => (icon.style.visibility = "hidden"));
-
-    const title = document.createElement("span");
-    title.className = "tab-title";
-    title.textContent = tab.title || tab.url || "Untitled tab";
-
-    button.append(icon, title);
-    button.addEventListener("click", async () => {
-      await api.tabs.update(tab.id, { active: true });
-      if (tab.windowId != null) {
-        await api.windows.update(tab.windowId, { focused: true });
-      }
-      window.close();
-    });
-
-    li.appendChild(button);
-    tabsList.appendChild(li);
-  }
 }
 
 // --- Init ---------------------------------------------------------------
@@ -167,7 +158,7 @@ async function init() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   if (tab) activeTabId = tab.id;
 
-  await renderAudibleTabs();
+  await renderNowPlaying();
 
   if (!tab || (tab.url && RESTRICTED.test(tab.url))) {
     setControlsEnabled(false);

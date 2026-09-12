@@ -305,51 +305,27 @@ body {
   border-radius: 12px;
 }
 
-/* --- Audible tabs ------------------------------------------------------ */
+/* --- Now-playing row --------------------------------------------------- */
+/* A single, non-interactive row for the current tab while it's making sound;
+   hidden entirely when the tab is silent (popup.js toggles [hidden]). */
 .tabs {
   margin-top: 20px;
-}
-.section-label {
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1.4px;
-  color: var(--muted);
-  margin-bottom: 9px;
-}
-.tabs-empty {
-  margin: 0;
-  padding: 15px;
-  text-align: center;
-  font-size: 12.5px;
-  color: var(--muted);
-  background: var(--panel-2);
-  border-radius: 13px;
 }
 .tabs-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 .tab-item {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 9px 10px;
-  border: none;
-  background: transparent;
-  border-radius: 10px;
-  cursor: pointer;
-  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
   font-size: 12.5px;
   color: var(--ink);
-}
-.tab-item:hover {
-  background: var(--panel-2);
+  background: var(--tint);
 }
 .tab-item img {
   width: 16px;
@@ -361,9 +337,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.tab-item.current {
-  background: var(--tint);
 }
 
 /* --- Rate this extension ----------------------------------------------- */
