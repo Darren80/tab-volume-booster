@@ -4,90 +4,84 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="popup.css" />
-    <title>Tab Volume Booster</title>
+    <title>Crescendo</title>
   </head>
   <body>
-    <div class="card">
-      <header class="header">
-        <div class="brand">
-          <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M3 9v6h4l5 5V4L7 9H3z"
-              fill="currentColor"
-            />
-            <path
-              d="M16 8.5a4 4 0 0 1 0 7"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
-            <path
-              d="M18.5 6a7.5 7.5 0 0 1 0 12"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
+    <div class="app">
+      <header class="topbar">
+        <span class="logo">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="13" width="3.4" height="7" rx="1.7" fill="currentColor" />
+            <rect x="10.3" y="9" width="3.4" height="11" rx="1.7" fill="currentColor" />
+            <rect x="17.6" y="6.5" width="3.4" height="13.5" rx="1.7" fill="currentColor" />
+            <path d="M18.5 1.5 L21.8 6 L15.2 6 Z" fill="currentColor" />
           </svg>
-          <h1>Tab Volume Booster</h1>
+        </span>
+        <div class="brand-text">
+          <span class="brand-name">Crescendo</span>
+          <span class="brand-tag">Boost any tab up to 600&thinsp;%</span>
         </div>
       </header>
 
-      <p class="subtitle">
-        Use the slider below to control the volume of the current tab.
-      </p>
-
-      <div class="slider-block">
-        <input
-          id="volume"
-          class="slider"
-          type="range"
-          min="0"
-          max="600"
-          step="1"
-          value="100"
-          aria-label="Volume"
-        />
-        <!-- End labels are filled in from the content script's configured range
-             (SETTINGS.volume in content.js); these are just initial text. -->
-        <div class="slider-labels">
-          <span id="sliderMin">0 %</span>
-          <span id="volumeReadout" class="readout">Volume: 100 %</span>
-          <span id="sliderMax">600 %</span>
+      <section class="hero">
+        <div class="dial">
+          <div class="dial-inner">
+            <span id="volumeReadout" class="dial-value">100%</span>
+            <span class="dial-label">tab volume</span>
+          </div>
         </div>
-      </div>
 
-      <div class="presets">
-        <button class="preset" data-preset="default">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
-          Default
-        </button>
-        <button class="preset" data-preset="voice">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z" fill="currentColor"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          Voice boost
-        </button>
-        <button class="preset" data-preset="bass">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l4-1 3 6 4-14 2 8 3-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Bass boost
-        </button>
-      </div>
+        <div class="slider-wrap">
+          <input
+            id="volume"
+            class="slider"
+            type="range"
+            min="0"
+            max="600"
+            step="1"
+            value="100"
+            aria-label="Volume"
+          />
+          <!-- End labels are filled in from the content script's configured range
+               (SETTINGS.volume in content.js); these are just initial text. -->
+          <div class="slider-labels">
+            <span id="sliderMin">0 %</span>
+            <span id="sliderMax">600 %</span>
+          </div>
+        </div>
+      </section>
 
       <p id="statusHint" class="status-hint" hidden></p>
 
-      <button id="reset" class="reset" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
-        Reset to 100 % volume
-      </button>
-
-      <div id="tabs" class="tabs">
-        <p id="tabsEmpty" class="tabs-empty">No tabs playing audio right now</p>
-        <ul id="tabsList" class="tabs-list" hidden></ul>
+      <div class="presets" role="group" aria-label="Sound preset">
+        <button class="preset" data-preset="default">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
+          <span>Flat</span>
+        </button>
+        <button class="preset" data-preset="voice">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z" fill="currentColor"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>Voice</span>
+        </button>
+        <button class="preset" data-preset="bass">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l4-1 3 6 4-14 2 8 3-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Bass</span>
+        </button>
       </div>
 
+      <button id="reset" class="reset" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
+        Reset to 100&thinsp;%
+      </button>
+
+      <section class="tabs">
+        <div class="section-label">Playing audio</div>
+        <p id="tabsEmpty" class="tabs-empty">No tabs are playing audio right now.</p>
+        <ul id="tabsList" class="tabs-list" hidden></ul>
+      </section>
+
       <footer class="footer">
-        <div class="stars" aria-hidden="true">★★★★★</div>
-        <p class="credit">Made with <span class="heart">♥</span> — a Firefox volume booster</p>
+        <span class="dot"></span>
+        Contact: <a href="mailto:darren.ohonba@gmail.com">darren.ohonba@gmail.com</a>
       </footer>
     </div>
 

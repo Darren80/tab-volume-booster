@@ -45,9 +45,13 @@ function applyRange(min, max, def) {
 
 function renderVolume(percent) {
   slider.value = percent;
-  readout.textContent = `Volume: ${percent} %`;
+  readout.textContent = `${percent}%`;
   const span = MAX - MIN || 1;
-  slider.style.setProperty("--fill", `${((percent - MIN) / span) * 100}%`);
+  // Set on :root so both the slider fill and the circular gauge (.dial) read it.
+  document.documentElement.style.setProperty(
+    "--fill",
+    `${((percent - MIN) / span) * 100}%`
+  );
   resetButton.disabled = slider.disabled || percent === DEFAULT;
 }
 
@@ -163,7 +167,7 @@ async function init() {
 
   if (!tab || (tab.url && RESTRICTED.test(tab.url))) {
     setControlsEnabled(false);
-    readout.textContent = "Not available on this page";
+    readout.textContent = "n/a";
     statusHint.hidden = false;
     statusHint.textContent =
       "Firefox doesn't allow add-ons to run here. Open a normal website (like a YouTube video) and reopen this.";
