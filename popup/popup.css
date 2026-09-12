@@ -431,6 +431,63 @@ body {
   text-decoration: underline;
 }
 
+/* --- First-run coach marks --------------------------------------------- */
+/* Dim the popup, lift the control being pointed at above the dim, and float a
+   tip with an arrow at it. Click anywhere to advance (popup.js drives it). */
+.coach {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(20, 18, 34, 0.6);
+  cursor: pointer;
+}
+.coach-target {
+  position: relative;
+  z-index: 51;
+  border-radius: 14px;
+  box-shadow: 0 0 0 3px #fff, 0 0 0 7px var(--acc-solid);
+}
+.coach-tip {
+  position: absolute;
+  z-index: 52;
+  left: 22px;
+  right: 22px;
+  padding: 14px 16px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 14px 36px rgba(20, 18, 34, 0.45);
+}
+/* Arrow: a white triangle whose left edge popup.js aims at the target's centre. */
+.coach-tip::before {
+  content: "";
+  position: absolute;
+  left: var(--arrow, 50%);
+  transform: translateX(-50%);
+  border: 9px solid transparent;
+}
+.coach-tip.below::before {
+  bottom: 100%;
+  border-bottom-color: #fff;
+}
+.coach-tip.above::before {
+  top: 100%;
+  border-top-color: #fff;
+}
+.coach-text {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #1a1c26; /* near-black on white — high contrast, easy to read */
+}
+.coach-hint {
+  display: block;
+  margin-top: 9px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--acc-ink);
+}
+
 /* --- Footer ------------------------------------------------------------ */
 .footer {
   display: flex;

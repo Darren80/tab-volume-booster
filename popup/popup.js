@@ -258,6 +258,7 @@ async function init() {
 
   // Be optimistic: let the user drive the controls right away.
   setControlsEnabled(true);
+  maybeShowTutorial(); // first run only — fire and forget
 
   const states = await syncState(tab.id);
   const target = states.length ? pickTargetFrame(states) : null;
@@ -398,5 +399,52 @@ stars.addEventListener("mouseleave", () => paintStars(0));
 stars.addEventListener("focusout", (event) => {
   if (!stars.contains(event.relatedTarget)) paintStars(0);
 });
+
+// --- First-run coach marks ----------------------------------------------
+// Shown once (storage.local "tutorialSeen"): dim the popup and point an arrow
+// at the slider, then the presets. Click anywhere to advance / dismiss.
+const coach = document.getElementById("coach");
+const coachTip = document.getElementById("coachTip");
+const coachText = document.getElementById("coachText");
+const COACH_STEPS = [
+  { el: document.querySelector(".slider-wrap"), text: "Drag the slider to boost this tab — up to 1200%." },
+  { el: document.querySelector(".presets"), text: "Click a preset to boost a voice or increase bass." },
+];
+let coachStep = -1;
+
+function nextCoach() {
+  COACH_STEPS[coachStep]?.el.classList.remove("coach-target");
+  if (++coachStep >= COACH_STEPS.length) {
+    coach.hidden = true;
+    try { api.storage.local.set({ tutorialSeen: true }); } catch (e) {}
+    return;
+  }
+  const { el, text } = COACH_STEPS[coachStep];
+  el.classList.add("coach-target");
+  coachText.textContent = text;
+  const r = el.getBoundingClientRect();
+  const below = r.bottom + 12 + coachTip.offsetHeight < window.innerHeight;
+  coachTip.classList.toggle("below", below);
+  coachTip.classList.toggle("above", !below);
+  coachTip.style.top = `${below ? r.bottom + 12 : r.top - 12 - coachTip.offsetHeight}px`;
+  coachTip.style.setProperty("--arrow", `${r.left + r.width / 2 - 22}px`);
+}
+
+async function maybeShowTutorial() {
+  try {
+    if ((await api.storage.local.get("tutorialSeen")).tutorialSeen) return;
+  } catch (e) { /* storage unavailable — just show it */ }
+  coach.hidden = false;
+  nextCoach();
+}
+coach.addEventListener("click", nextCoach);
+
+// The real gesture also dismisses its own step: dragging the slider clears the
+// slider tip, clicking a preset clears the preset tip.
+function dismissCoachStep(step) {
+  if (!coach.hidden && coachStep === step) nextCoach();
+}
+slider.addEventListener("input", () => dismissCoachStep(0));
+presetButtons.forEach((b) => b.addEventListener("click", () => dismissCoachStep(1)));
 
 init();
