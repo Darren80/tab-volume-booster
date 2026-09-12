@@ -40,7 +40,7 @@
       defaultPercent: 100, // where a fresh tab starts (no boost)
     },
 
-    // ---- The two EQ bands the presets drive. --------------------------------
+    // ---- The EQ bands the presets drive. --------------------------------------
     //  A "biquad" filter reshapes the sound. These define WHERE each band sits
     //  and how wide it is; how hard each preset pushes them is set in `presets`.
     bassBand: {
@@ -60,23 +60,21 @@
     },
     trebleBand: {
       type: "highshelf", // lifts/cuts EVERYTHING above `frequencyHz`
-      frequencyHz: 4000, // top of the vocal band. The Voice preset CUTS here to roll off the
-      //                    "air"/hiss/sibilance above the voice — this high-cut, paired with
-      //                    the low-cut below, is what band-limits the sound to an old-radio
-      //                    window and makes speech pop out of it. Corner kept above ~4 kHz so
-      //                    consonants (which give clarity) survive.
+      frequencyHz: 6500, // above the consonant band (s/t/f/sh live at 4–6 kHz), so the
+      //                    Voice preset's cut kills hiss and noise without dulling clarity.
+      //                    Was 4 kHz, which softened consonants.
     },
 
     // ---- Presets: each sets the three bands' gain in DECIBELS. 0 dB = flat. --
     //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half.
-    //  Too subtle? Raise the numbers. Distorting/crackly? Lower them.
-    //  Voice is a deliberate band-pass: cut lows AND highs, boost the midrange —
-    //  that's the "old-time radio", everything-but-the-voice-stripped-away sound.
     presets: {
       default: { bassGainDb: 0, voiceGainDb: 0, trebleGainDb: 0 }, // flat — no colouring
       bass: { bassGainDb: 14, voiceGainDb: 0, trebleGainDb: 0 }, // boomy, weighty low end
-      voice: { bassGainDb: -12, voiceGainDb: 11, trebleGainDb: -5 }, // band-limited radio
-      //         voice: strip lows, strip highs, shove the midrange forward.
+      voice: { bassGainDb: -12, voiceGainDb: 6, trebleGainDb: -9 }, // voice isolation:
+      //         kill lows, boost presence, kill highs. Consonants (4–6 kHz) survive
+      //         because the treble shelf sits at 6.5 kHz. Presence lift kept to +6 dB:
+      //         at +11 it landed on top of the voice's natural 2–2.7 kHz peak and
+      //         pierced on upward inflections. +6 adds clarity without the ice-pick.
     },
 
     // ---- The soft clipper: the anti-clipping stage at the end of the chain. --
