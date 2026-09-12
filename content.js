@@ -1,6 +1,7 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> bassFilter (lowshelf) -> voiceFilter (peaking) -> trebleFilter (highshelf) -> masterGain -> destination
+//   source -> bassFilter (lowshelf) -> voiceFilter (peaking) -> trebleFilter (highshelf) -> [ soft clipper | masterGain ] -> destination
+//   (the last stage is a soft clipper that bakes in the volume boost; toggle it off to fall back to a plain gain node)
 //
 // Two hard-won rules (both verified by testing in real Firefox):
 //
@@ -35,7 +36,7 @@
     //  change the number here.
     volume: {
       minPercent: 0,
-      maxPercent: 1200, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
+      maxPercent: 2400, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
       defaultPercent: 100, // where a fresh tab starts (no boost, no cut)
     },
 
@@ -74,8 +75,31 @@
     presets: {
       default: { bassGainDb: 0, voiceGainDb: 0, trebleGainDb: 0 }, // flat — no colouring
       bass: { bassGainDb: 14, voiceGainDb: 0, trebleGainDb: 0 }, // boomy, weighty low end
-      voice: { bassGainDb: -12, voiceGainDb: 11, trebleGainDb: -10 }, // band-limited radio
+      voice: { bassGainDb: -12, voiceGainDb: 11, trebleGainDb: -5 }, // band-limited radio
       //         voice: strip lows, strip highs, shove the midrange forward.
+    },
+
+    // ---- The soft clipper: the anti-clipping stage at the end of the chain. --
+    //  Once you push the slider hard, the loudest peaks shoot past the digital
+    //  ceiling (±1.0). Chop them off square and you get harsh, buzzy "clipping".
+    //  Instead we ROUND them off: the signal passes through untouched until it
+    //  nears the ceiling, then eases smoothly up to it and can never cross it —
+    //  turning nasty digital clipping into warm, gradual saturation (the way an
+    //  analog amp overdrives). Unlike a compressor/limiter it acts instantly and
+    //  ONLY on the peaks near the top, so it doesn't squash dynamics or "pump" —
+    //  which is what made the previous limiter sound muted when driven hard.
+    //
+    //  Because a WaveShaper clamps its own input to ±1, the volume boost can't sit
+    //  in front of it — so we bake the boost INTO the shaping curve and rebuild the
+    //  curve whenever the slider moves. (See updateShaperCurve.)
+    softClip: {
+      enabled: true, // on by default. Flip off to A/B against raw (clippable) gain —
+      //                live-toggle with setSoftClipEnabled() / the "set-softclip" message.
+      kneeStartDb: -3, // below this level the sound is untouched; above it, saturation eases in.
+      //                 Higher (e.g. -1) = cleaner/more transparent; lower (e.g. -9) = warmer, more driven.
+      ceilingDb: -0.5, // the hard ceiling output can never exceed — a hair under 0 dBFS for safety.
+      curveSamples: 16384, // resolution of the shaping lookup table (bigger = finer, costs a little memory).
+      oversample: "4x", // "none" | "2x" | "4x": tames the aliasing that any clipping adds. 4x = smoothest.
     },
   };
   // ==========================================================================
@@ -85,6 +109,8 @@
   let bassFilter = null;
   let voiceFilter = null;
   let trebleFilter = null;
+  let shaper = null; // WaveShaper doing the soft clipping (with the boost baked into its curve)
+  let clipEnabled = SETTINGS.softClip.enabled; // live bypass flag; toggle with setSoftClipEnabled()
   let observer = null;
   let gesturesHooked = false;
 
@@ -118,13 +144,27 @@
     trebleFilter.frequency.value = SETTINGS.trebleBand.frequencyHz;
     trebleFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
+    // Two possible tails, both wired to the speakers; the treble filter feeds
+    // exactly one of them (see routeClip), so toggling soft-clip is instant.
+    //
+    //  ON  : trebleFilter -> shaper -> destination
+    //        The shaper's curve applies the boost AND rounds off the peaks. (The
+    //        boost lives in the curve because a WaveShaper clamps its input to ±1,
+    //        so a gain node in front of it would just hard-clip.)
+    //  OFF : trebleFilter -> masterGain -> destination
+    //        A plain gain node — the raw, boosted, freely-clippable signal (A/B).
     masterGain = audioContext.createGain();
     masterGain.gain.value = currentVolume;
 
+    shaper = audioContext.createWaveShaper();
+    shaper.oversample = SETTINGS.softClip.oversample;
+    updateShaperCurve(); // bakes the current volume + the soft-clip shape into the curve
+
     bassFilter.connect(voiceFilter);
     voiceFilter.connect(trebleFilter);
-    trebleFilter.connect(masterGain);
-    masterGain.connect(audioContext.destination);
+    masterGain.connect(audioContext.destination); // OFF tail — always wired, fed only when bypassed
+    shaper.connect(audioContext.destination); //     ON  tail — always wired, fed only when engaged
+    routeClip(); // point trebleFilter at whichever tail is active
 
     applyPresetNodes();
 
@@ -132,6 +172,61 @@
     audioContext.addEventListener("statechange", () => {
       if (audioContext.state === "running") wireAll();
     });
+  }
+
+  const dbToLinear = (db) => Math.pow(10, db / 20);
+
+  // The soft-clip transfer function. Feed it the already-boosted sample value
+  // `u` (may be far outside ±1); it returns a value that stays untouched below
+  // the knee and eases smoothly toward `ceiling`, never crossing it.
+  //   |u| <= knee : pass straight through (transparent — no colouring)
+  //   |u|  > knee : knee + (ceiling-knee) * tanh((|u|-knee)/(ceiling-knee))
+  // tanh's slope is 1 at the knee (so the curve is smooth there) and flattens to
+  // the ceiling as |u| grows — a gentle, bounded overdrive instead of a hard edge.
+  function softClipSample(u, knee, ceiling) {
+    const mag = Math.abs(u);
+    if (mag <= knee) return u;
+    const sign = u < 0 ? -1 : 1;
+    return sign * (knee + (ceiling - knee) * Math.tanh((mag - knee) / (ceiling - knee)));
+  }
+
+  // Rebuild the WaveShaper's lookup curve for the CURRENT volume. The boost is
+  // baked in here (curve[x] = softClip(volume * x)) because the shaper clamps its
+  // own input to ±1 — so the gain must be applied as we build the table, not by a
+  // node in front of it. Called on startup and on every volume change.
+  function updateShaperCurve() {
+    if (!shaper) return;
+    const n = SETTINGS.softClip.curveSamples;
+    const knee = dbToLinear(SETTINGS.softClip.kneeStartDb);
+    const ceiling = dbToLinear(SETTINGS.softClip.ceilingDb);
+    const drive = currentVolume; // the slider's multiplier, applied inside the curve
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1; // map table index -> input sample in [-1, 1]
+      curve[i] = softClipSample(drive * x, knee, ceiling);
+    }
+    shaper.curve = curve;
+  }
+
+  // Point the treble filter at whichever tail is active: the shaper (soft-clip on)
+  // or the plain masterGain (off). Both tails stay wired to the speakers, so this
+  // is just re-pointing one connection — no rebuild, safe to flip live.
+  function routeClip() {
+    if (!trebleFilter || !masterGain || !shaper) return;
+    try {
+      trebleFilter.disconnect();
+    } catch (err) {
+      /* nothing connected yet */
+    }
+    trebleFilter.connect(clipEnabled ? shaper : masterGain);
+  }
+
+  // Programmatic on/off for the soft clipper — handy for A/B testing. Call
+  // setSoftClipEnabled(false) to hear the raw (clippable) boost, true to protect it.
+  function setSoftClipEnabled(on) {
+    clipEnabled = !!on;
+    routeClip();
+    return clipEnabled;
   }
 
   // Can this element's audio survive createMediaElementSource without being
@@ -233,7 +328,8 @@
     );
     currentVolume = clamped / 100;
     engage();
-    if (masterGain) masterGain.gain.value = currentVolume;
+    if (masterGain) masterGain.gain.value = currentVolume; // OFF path gain
+    updateShaperCurve(); // ON path: rebuild the soft-clip curve with the new boost baked in
     // Immediate <=100% control for elements we won't (or can't yet) route.
     document.querySelectorAll("video, audio").forEach((element) => {
       if (!wired.has(element) && !isRoutable(element)) {
@@ -275,6 +371,7 @@
       hasMedia: counts.total > 0,
       engaged,
       contextState,
+      softClipEnabled: clipEnabled,
       // The popup shows a hint when boost is engaged but the page context isn't
       // running yet (user needs to click the page), or when some media can't be
       // boosted because it's cross-origin.
@@ -297,8 +394,21 @@
         applyPreset("default");
         setVolume(100);
         return Promise.resolve(getState());
+      case "set-softclip": // { type: "set-softclip", enabled: true|false }
+        setSoftClipEnabled(message.enabled);
+        return Promise.resolve(getState());
       default:
         return undefined;
     }
   });
+
+  // Console test hook. From the *content script's* devtools context you can run:
+  //   __tabVolumeBooster.setSoftClip(false)  // hear the raw, clippable boost
+  //   __tabVolumeBooster.setSoftClip(true)   // smooth, protected again
+  // (Easiest: DevTools console context dropdown -> this page's content script,
+  //  or drive it from the popup via a "set-softclip" message.)
+  window.__tabVolumeBooster = {
+    setSoftClip: setSoftClipEnabled,
+    isSoftClipEnabled: () => clipEnabled,
+  };
 })();
