@@ -12,6 +12,11 @@ let MAX = 600; // max volume %
 let MIN = 0; // min volume %
 let DEFAULT = 100; // "normal"/reset volume %
 
+// Where the star rating sends people. Once the add-on is live on AMO, replace
+// the slug below with the real one from its listing URL (…/addon/<slug>/).
+const REVIEW_URL =
+  "https://addons.mozilla.org/firefox/addon/crescendo-tab-volume-booster/reviews/";
+
 const slider = document.getElementById("volume");
 const readout = document.getElementById("volumeReadout");
 const resetButton = document.getElementById("reset");
@@ -19,6 +24,7 @@ const presetButtons = [...document.querySelectorAll(".preset")];
 const tabsEmpty = document.getElementById("tabsEmpty");
 const tabsList = document.getElementById("tabsList");
 const statusHint = document.getElementById("statusHint");
+const stars = document.getElementById("stars");
 
 let activeTabId = null;
 let currentPreset = "default";
@@ -68,9 +74,7 @@ function renderHint(state) {
     return;
   }
   let message = "";
-  if (state.pending) {
-    message = "Click anywhere on the page once to activate the boost.";
-  } else if (state.blockedMedia > 0) {
+  if (state.blockedMedia > 0) {
     message = "This audio is from another site and can't be boosted above 100%.";
   } else if (state.engaged && !state.hasMedia) {
     message = "No audio or video found on this page yet.";
@@ -195,10 +199,76 @@ async function init() {
 
 // --- Event wiring -------------------------------------------------------
 
-slider.addEventListener("input", async () => {
-  const percent = Number(slider.value);
-  renderVolume(percent);
-  renderHint(await send({ type: "set-volume", value: percent }));
+// --- Variable step: fine below 100 %, coarse above -----------------------
+// Below the default the slider moves in 1 % steps; at/above it, in 10 % steps.
+// Boosting is a blunt instrument (10 % is barely audible), while trimming below
+// 100 % wants precision — so the grid coarsens exactly where 100 % begins.
+const COARSE_FROM = 100; // the boundary: fine steps below it, coarse at/above
+
+function clampVol(v) {
+  return Math.min(MAX, Math.max(MIN, v));
+}
+
+// Snap a raw value to the nearest valid stop for where it sits: to the nearest
+// 1 below the boundary, to the nearest 10 at/above it. Used while dragging.
+function snapVol(v) {
+  const snapped = v < COARSE_FROM ? Math.round(v) : Math.round(v / 10) * 10;
+  return clampVol(snapped);
+}
+
+// Move one stop up or down from `from`, honouring the coarse/fine boundary so
+// arrow keys land cleanly on 99 → 100 → 110. Used for keyboard nudges.
+function stepVol(from, dir) {
+  if (dir > 0) {
+    const step = from >= COARSE_FROM ? 10 : 1; // 99→100 (fine), 100→110 (coarse)
+    return clampVol(from + step);
+  }
+  const step = from > COARSE_FROM ? 10 : 1; // 110→100 (coarse), 100→99 (fine)
+  return clampVol(from - step);
+}
+
+// One place to apply a new volume: reflect it in the UI and tell the tab.
+async function commitVolume(percent) {
+  const v = clampVol(percent);
+  renderVolume(v);
+  renderHint(await send({ type: "set-volume", value: v }));
+}
+
+slider.addEventListener("input", () => {
+  commitVolume(snapVol(Number(slider.value)));
+});
+
+// Own the arrow / page / home-end keys so their steps follow the same grid the
+// mouse does (native range steps are a single fixed size and can't vary).
+slider.addEventListener("keydown", (event) => {
+  const current = Number(slider.value);
+  let next;
+  switch (event.key) {
+    case "ArrowUp":
+    case "ArrowRight":
+      next = stepVol(current, +1);
+      break;
+    case "ArrowDown":
+    case "ArrowLeft":
+      next = stepVol(current, -1);
+      break;
+    case "PageUp":
+      next = snapVol(current + 50);
+      break;
+    case "PageDown":
+      next = snapVol(current - 50);
+      break;
+    case "Home":
+      next = MIN;
+      break;
+    case "End":
+      next = MAX;
+      break;
+    default:
+      return; // let every other key behave normally
+  }
+  event.preventDefault(); // stop the native single-step move
+  commitVolume(next);
 });
 
 presetButtons.forEach((button) => {
@@ -217,6 +287,20 @@ resetButton.addEventListener("click", async () => {
     renderVolume(state.volume);
     renderPreset(state.preset);
     renderHint(state);
+  }
+});
+
+// Rating: open the store's review page in a new tab. It's a single link, so
+// clicking any star (or activating it by keyboard) does the same thing.
+function openReview() {
+  api.tabs.create({ url: REVIEW_URL });
+  window.close();
+}
+stars.addEventListener("click", openReview);
+stars.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openReview();
   }
 });
 

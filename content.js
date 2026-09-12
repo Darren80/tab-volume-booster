@@ -320,6 +320,23 @@
     if (audioContext.state === "running") wireAll();
   }
 
+  // Tell the background page our current volume + preset. It uses this to stamp
+  // (or clear) the toolbar badge AND to remember this tab's setting across a
+  // refresh. Fire-and-forget; if the background isn't up yet it rejects harmlessly.
+  function reportState() {
+    try {
+      api.runtime
+        .sendMessage({
+          type: "vol-state",
+          volume: Math.round(currentVolume * 100),
+          preset: currentPreset,
+        })
+        ?.catch(() => {});
+    } catch (err) {
+      /* messaging unavailable (e.g. during teardown) — ignore */
+    }
+  }
+
   function setVolume(percent) {
     // Clamp to the configured slider range (guards against stray messages).
     const clamped = Math.min(
@@ -327,6 +344,7 @@
       Math.max(SETTINGS.volume.minPercent, percent)
     );
     currentVolume = clamped / 100;
+    reportState(); // update the toolbar badge + this tab's remembered setting
     engage();
     if (masterGain) masterGain.gain.value = currentVolume; // OFF path gain
     updateShaperCurve(); // ON path: rebuild the soft-clip curve with the new boost baked in
@@ -342,6 +360,7 @@
     currentPreset = name === "bass" || name === "voice" ? name : "default";
     engage();
     applyPresetNodes();
+    reportState(); // remember the preset for this tab (and refresh the badge)
   }
 
   // --- State for the popup ----------------------------------------------
@@ -411,4 +430,29 @@
     setSoftClip: setSoftClipEnabled,
     isSoftClipEnabled: () => clipEnabled,
   };
+
+  // Restore this tab's last volume/preset (survives a refresh, since a refresh
+  // keeps the tab id). If there's nothing saved, report the default so any badge
+  // left over from a previous page in this tab is cleared.
+  function restoreState() {
+    let pending;
+    try {
+      pending = api.runtime.sendMessage({ type: "vol-restore" });
+    } catch (err) {
+      reportState();
+      return;
+    }
+    Promise.resolve(pending)
+      .then((saved) => {
+        if (saved && typeof saved.volume === "number") {
+          if (saved.preset) applyPreset(saved.preset); // also engages the graph
+          setVolume(saved.volume); // applies the boost + refreshes badge
+        } else {
+          reportState(); // nothing saved — clear any stale badge
+        }
+      })
+      .catch(() => reportState());
+  }
+
+  restoreState();
 })();

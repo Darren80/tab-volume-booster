@@ -355,6 +355,50 @@ body {
   background: var(--tint);
 }
 
+/* --- Rate this extension ----------------------------------------------- */
+.rate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  margin-top: 20px;
+}
+.rate-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.stars {
+  /* The whole row is one link to the store, so it fills as a unit — a partial
+     per-star fill would wrongly imply the click submits that many stars. */
+  display: inline-flex;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  border-radius: 8px;
+  outline: none;
+}
+.stars .star {
+  width: 26px;
+  height: 26px;
+  fill: var(--track);
+  transition: fill 0.1s ease, transform 0.1s ease;
+}
+.stars:hover .star,
+.stars:focus-visible .star {
+  fill: #ffb400;
+}
+.stars:hover .star {
+  transform: scale(1.04);
+}
+.stars:focus-visible {
+  box-shadow: 0 0 0 3px var(--tint);
+}
+.rate-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* --- Footer ------------------------------------------------------------ */
 .footer {
   display: flex;
