@@ -30,12 +30,23 @@ const BADGE_FG = "#ffffff"; // white number for contrast
 
 const keyFor = (tabId) => `tab-${tabId}`;
 
+// Firefox's badge only fits ~3–4 (narrow) characters. Up to three digits the raw
+// percentage fits fine ("360"), so show it as-is. Only four-digit percentages
+// (1000%+) overflow and clip ("1200" → "120"), so for those we fall back to a
+// compact MULTIPLIER — "10x", "12x" — which stays within the badge's width.
+function badgeText(percent) {
+  if (percent === DEFAULT_PERCENT) return ""; // normal volume → no badge
+  if (percent < 1000) return String(percent); // ≤3 digits: fits as a percentage
+  const mult = percent / 100; // 4-digit percentage → compact multiplier instead
+  return (Number.isInteger(mult) ? String(mult) : mult.toFixed(1)) + "x";
+}
+
 function setIndicator(tabId, percent) {
   if (tabId == null) return;
-  // Boosted → show the number; normal volume → clear the badge. Each call is
+  // Boosted → show the multiplier; normal volume → clear the badge. Each call is
   // wrapped: a tab can vanish (closed/navigated) between the report and here,
   // which rejects the promise — harmless, so swallow it.
-  const text = percent === DEFAULT_PERCENT ? "" : String(percent);
+  const text = badgeText(percent);
   api.action.setBadgeText({ tabId, text }).catch(() => {});
   api.action.setBadgeBackgroundColor({ tabId, color: BADGE_BG }).catch(() => {});
   // setBadgeTextColor isn't in every build; ignore if unavailable.

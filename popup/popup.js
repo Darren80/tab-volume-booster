@@ -92,7 +92,7 @@ function renderHint(state) {
     // almost always an embedded player inside a cross-origin iframe.
     warn = true;
     message =
-      "This audio plays inside an embedded player I can't reach — boosting it MAY not work.";
+      "The audio is playing inside an embedded player I can't reach — boosting it MAY not work.";
   } else if (state.blockedMedia > 0) {
     // Media loaded from another site without CORS: unroutable.
     warn = true;
