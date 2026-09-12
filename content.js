@@ -456,18 +456,13 @@
     isSoftClipEnabled: () => clipEnabled,
   };
 
-  const isTopFrame = window === window.top;
-  const frameHasMedia = () => !!document.querySelector("video, audio");
-
   // Restore this tab's last volume/preset (survives a refresh, since a refresh
-  // keeps the tab id). Since we now run in EVERY frame, we must be careful not to
-  // spin up an AudioContext in every empty subframe (a page can have dozens):
-  //   • The top frame always applies — it's the page the user is on, and applying
-  //     with no media just keeps the badge in sync (the graph stays silent).
-  //   • A subframe applies only once it actually has media, so an embedded player
-  //     (e.g. a YouTube iframe) re-boosts itself while ad/tracker frames stay
-  //     untouched. If its media hasn't appeared yet at document_idle, we watch
-  //     briefly and apply as soon as it shows up.
+  // keeps the tab id). We run in EVERY frame and apply uniformly — no top-frame /
+  // has-media special-casing. Building the graph in a frame is cheap and silent:
+  // nothing is ever routed until the context is running AND the frame actually has
+  // a media element (see wireAll), so an empty ad/tracker frame just holds an idle,
+  // soundless graph. One rule for every frame means live control and a reload can't
+  // drift apart — every frame that has media boosts, together.
   function applySaved(saved) {
     if (saved.preset) applyPreset(saved.preset); // also engages the graph
     setVolume(saved.volume); // applies the boost + refreshes badge
@@ -478,34 +473,18 @@
     try {
       pending = api.runtime.sendMessage({ type: "vol-restore" });
     } catch (err) {
-      if (isTopFrame) reportState();
+      reportState();
       return;
     }
     Promise.resolve(pending)
       .then((saved) => {
-        if (!(saved && typeof saved.volume === "number")) {
-          // Nothing saved. Only the top frame clears a stale badge; a silent
-          // subframe stays quiet so it never clobbers a boosted sibling frame.
-          if (isTopFrame) reportState();
-          return;
+        if (saved && typeof saved.volume === "number") {
+          applySaved(saved); // re-apply the tab's boost in this frame
+        } else {
+          reportState(); // nothing saved: keep this frame's badge entry in sync
         }
-        if (isTopFrame || frameHasMedia()) {
-          applySaved(saved);
-          return;
-        }
-        // Subframe with no media yet: wait for it to appear, then restore once.
-        const observer = new MutationObserver(() => {
-          if (frameHasMedia()) {
-            observer.disconnect();
-            applySaved(saved);
-          }
-        });
-        observer.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => observer.disconnect(), 30000); // give up quietly if none shows
       })
-      .catch(() => {
-        if (isTopFrame) reportState();
-      });
+      .catch(() => reportState());
   }
 
   restoreState();

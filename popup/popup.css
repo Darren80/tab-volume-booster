@@ -39,7 +39,7 @@ body {
      full-screen, so cap the width but let it shrink to the phone's viewport
      (a hard 424px would overflow a ~360px screen and force horizontal scroll). */
   width: 424px;
-  max-width: 100vw;
+  /* max-width: 100vw; */
   min-height: 580px;
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   color: var(--ink);

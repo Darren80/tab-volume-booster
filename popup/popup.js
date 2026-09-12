@@ -125,14 +125,24 @@ async function ensureInjected(tabId) {
   }
 }
 
-// Send to the ONE frame the popup is driving (the one that holds the media).
-async function send(message) {
+// Apply a mutation (set-volume / set-preset / reset) to EVERY frame in the tab,
+// so all media frames move together — exactly what a reload does when each frame
+// restores. Every frame applies uniformly; a frame with no media just holds an
+// idle, silent graph (nothing is routed until it's running AND has media). We
+// return the driven media frame's reply so the readout and hint reflect the
+// frame the user actually hears.
+async function broadcast(message) {
   if (activeTabId == null) return null;
+  let ids = [0]; // fall back to the top frame if enumeration fails
   try {
-    return await api.tabs.sendMessage(activeTabId, message, { frameId: activeFrameId });
+    const frames = await api.webNavigation.getAllFrames({ tabId: activeTabId });
+    if (frames && frames.length) ids = frames.map((f) => f.frameId);
   } catch (err) {
-    return null;
+    /* keep the top-frame fallback */
   }
+  const replies = await Promise.all(ids.map((id) => sendToFrame(id, message)));
+  const mine = replies[ids.indexOf(activeFrameId)];
+  return mine ?? replies.find((r) => r?.ok) ?? null;
 }
 
 // Send to a specific frame (used while probing every frame for its state).
@@ -295,7 +305,7 @@ function stepVol(from, dir) {
 async function commitVolume(percent) {
   const v = clampVol(percent);
   renderVolume(v);
-  renderHint(await send({ type: "set-volume", value: v }));
+  renderHint(await broadcast({ type: "set-volume", value: v }));
 }
 
 slider.addEventListener("input", () => {
@@ -338,7 +348,7 @@ slider.addEventListener("keydown", (event) => {
 presetButtons.forEach((button) => {
   button.addEventListener("click", async () => {
     const name = button.dataset.preset;
-    const state = await send({ type: "set-preset", name });
+    const state = await broadcast({ type: "set-preset", name });
     renderPreset(state?.preset ?? name);
     if (state) renderVolume(state.volume);
     renderHint(state);
@@ -346,7 +356,7 @@ presetButtons.forEach((button) => {
 });
 
 resetButton.addEventListener("click", async () => {
-  const state = await send({ type: "reset" });
+  const state = await broadcast({ type: "reset" });
   if (state) {
     renderVolume(state.volume);
     renderPreset(state.preset);
