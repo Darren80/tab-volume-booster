@@ -365,9 +365,10 @@ resetButton.addEventListener("click", async () => {
   }
 });
 
-// Rating. Each star carries a value 1–5. A happy rating (3–5) goes to the store;
-// a low one (1–2) is intercepted — instead of sending an unhappy user straight
-// to a public review, we surface our email and ask them to reach out first.
+// Rating. Each star carries a value 1–5. A happy rating (4–5) goes to the store;
+// a lukewarm-or-worse one (1–3) is intercepted — instead of sending a less-than-
+// thrilled user straight to a public review, we surface our email and ask them to
+// reach out first.
 const starEls = [...stars.querySelectorAll(".star")];
 const rateHint = document.getElementById("rateHint");
 const rateFeedback = document.getElementById("rateFeedback");
@@ -378,7 +379,7 @@ function paintStars(n) {
 }
 
 function rate(value) {
-  if (value <= 2) {
+  if (value <= 3) {
     paintStars(value); // leave the chosen stars lit as acknowledgement
     rateHint.hidden = true;
     rateFeedback.hidden = false; // show the "contact us first" note; stay in the popup
