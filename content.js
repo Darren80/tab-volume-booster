@@ -1,6 +1,6 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> bassFilter (lowshelf) -> voiceFilter (peaking) -> masterGain -> destination
+//   source -> bassFilter (lowshelf) -> voiceFilter (peaking) -> trebleFilter (highshelf) -> masterGain -> destination
 //
 // Two hard-won rules (both verified by testing in real Firefox):
 //
@@ -51,21 +51,31 @@
     },
     voiceBand: {
       type: "peaking", // a bell centred on `frequencyHz`
-      frequencyHz: 3000, // speech "presence": ~3 kHz is where consonant intelligibility
-      //                    lives and the ear is most sensitive, so a lift here makes voices
-      //                    cut through without just sounding louder.
-      q: 0.9, // bell width — broad enough (~1.5 octaves) to sound natural, not "telephone-y".
+      frequencyHz: 2700, // speech "presence": the ~2–3 kHz band where consonant
+      //                    intelligibility lives and the ear is most sensitive. The Voice
+      //                    preset boosts it hard so the midrange dominates, radio-style.
+      q: 1.1, // bell width — a touch focused so the lift reads as "presence", not just louder.
       //         Higher = narrower/more surgical, lower = broader.
     },
+    trebleBand: {
+      type: "highshelf", // lifts/cuts EVERYTHING above `frequencyHz`
+      frequencyHz: 4000, // top of the vocal band. The Voice preset CUTS here to roll off the
+      //                    "air"/hiss/sibilance above the voice — this high-cut, paired with
+      //                    the low-cut below, is what band-limits the sound to an old-radio
+      //                    window and makes speech pop out of it. Corner kept above ~4 kHz so
+      //                    consonants (which give clarity) survive.
+    },
 
-    // ---- Presets: each sets the two bands' gain in DECIBELS. 0 dB = flat. ----
+    // ---- Presets: each sets the three bands' gain in DECIBELS. 0 dB = flat. --
     //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half.
     //  Too subtle? Raise the numbers. Distorting/crackly? Lower them.
+    //  Voice is a deliberate band-pass: cut lows AND highs, boost the midrange —
+    //  that's the "old-time radio", everything-but-the-voice-stripped-away sound.
     presets: {
-      default: { bassGainDb: 0, voiceGainDb: 0 }, // flat — no colouring at all
-      bass: { bassGainDb: 14, voiceGainDb: 0 }, // boomy, weighty low end
-      voice: { bassGainDb: -5, voiceGainDb: 9 }, // de-muds the low end and lifts presence so
-      //                                            speech clearly cuts through, not just louder
+      default: { bassGainDb: 0, voiceGainDb: 0, trebleGainDb: 0 }, // flat — no colouring
+      bass: { bassGainDb: 14, voiceGainDb: 0, trebleGainDb: 0 }, // boomy, weighty low end
+      voice: { bassGainDb: -12, voiceGainDb: 11, trebleGainDb: -10 }, // band-limited radio
+      //         voice: strip lows, strip highs, shove the midrange forward.
     },
   };
   // ==========================================================================
@@ -74,6 +84,7 @@
   let masterGain = null;
   let bassFilter = null;
   let voiceFilter = null;
+  let trebleFilter = null;
   let observer = null;
   let gesturesHooked = false;
 
@@ -102,11 +113,17 @@
     voiceFilter.Q.value = SETTINGS.voiceBand.q;
     voiceFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
+    trebleFilter = audioContext.createBiquadFilter();
+    trebleFilter.type = SETTINGS.trebleBand.type;
+    trebleFilter.frequency.value = SETTINGS.trebleBand.frequencyHz;
+    trebleFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
+
     masterGain = audioContext.createGain();
     masterGain.gain.value = currentVolume;
 
     bassFilter.connect(voiceFilter);
-    voiceFilter.connect(masterGain);
+    voiceFilter.connect(trebleFilter);
+    trebleFilter.connect(masterGain);
     masterGain.connect(audioContext.destination);
 
     applyPresetNodes();
@@ -195,6 +212,7 @@
     const preset = SETTINGS.presets[currentPreset] || SETTINGS.presets.default;
     bassFilter.gain.value = preset.bassGainDb;
     voiceFilter.gain.value = preset.voiceGainDb;
+    trebleFilter.gain.value = preset.trebleGainDb;
   }
 
   // Bring the graph up, hook gestures, and take over if we already can. Never
