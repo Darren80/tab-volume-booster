@@ -36,7 +36,7 @@
     //  change the number here.
     volume: {
       minPercent: 0,
-      maxPercent: 2400, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
+      maxPercent: 1200, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
       defaultPercent: 100, // where a fresh tab starts (no boost, no cut)
     },
 
