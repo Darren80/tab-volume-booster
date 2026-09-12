@@ -11,10 +11,16 @@
 // (fresh tab, or after a refresh — a refresh keeps the SAME tab id) it asks us
 // to RESTORE, and we hand back whatever that tab last had.
 //
+// FRAMES: the content script runs in every frame (all_frames), so a single tab
+// can report from several frames at once — e.g. the top page AND an embedded
+// player in a cross-origin <iframe>. Reports carry sender.frameId, so we track
+// each frame's volume separately and badge the tab with the STRONGEST boost
+// across its frames (otherwise a top frame sitting at 100% would keep clearing
+// the badge a boosted iframe just set).
+//
 // The indicator is Firefox's plain, built-in badge: setBadgeText draws the number
 // in the corner of the toolbar icon. It's not pretty and Firefox controls its
-// font/size, but it's reliable and never touches the icon artwork itself. (An
-// earlier version PAINTED the number as the whole icon; that's been removed.) At
+// font/size, but it's reliable and never touches the icon artwork itself. At
 // exactly 100% (normal volume) we clear the badge so the tab looks untouched.
 //
 // Storage is storage.session: it lives in memory for the browser session and is
@@ -30,6 +36,12 @@ const BADGE_FG = "#ffffff"; // white number for contrast
 
 const keyFor = (tabId) => `tab-${tabId}`;
 
+// Per-tab, per-frame last-reported volume, so the badge can show the tab's
+// strongest boost. tabId -> Map(frameId -> percent). In-memory only: it's purely
+// cosmetic, and frames re-report as they load, so losing it (event-page unload)
+// self-heals. It's reset when the top frame navigates (see webNavigation below).
+const tabFrames = new Map();
+
 // Firefox's badge only fits ~3–4 (narrow) characters. Up to three digits the raw
 // percentage fits fine ("360"), so show it as-is. Only four-digit percentages
 // (1000%+) overflow and clip ("1200" → "120"), so for those we fall back to a
@@ -41,24 +53,39 @@ function badgeText(percent) {
   return (Number.isInteger(mult) ? String(mult) : mult.toFixed(1)) + "x";
 }
 
-function setIndicator(tabId, percent) {
+// Paint the badge for a tab from the strongest boost across its frames. Each call
+// is wrapped: a tab can vanish (closed/navigated) between a report and here, which
+// rejects the promise — harmless, so swallow it.
+function refreshBadge(tabId) {
   if (tabId == null) return;
-  // Boosted → show the multiplier; normal volume → clear the badge. Each call is
-  // wrapped: a tab can vanish (closed/navigated) between the report and here,
-  // which rejects the promise — harmless, so swallow it.
-  const text = badgeText(percent);
-  api.action.setBadgeText({ tabId, text }).catch(() => {});
+  const frames = tabFrames.get(tabId);
+  let peak = DEFAULT_PERCENT;
+  if (frames) for (const percent of frames.values()) if (percent > peak) peak = percent;
+  api.action.setBadgeText({ tabId, text: badgeText(peak) }).catch(() => {});
   api.action.setBadgeBackgroundColor({ tabId, color: BADGE_BG }).catch(() => {});
   // setBadgeTextColor isn't in every build; ignore if unavailable.
   api.action.setBadgeTextColor?.({ tabId, color: BADGE_FG }).catch(() => {});
+}
+
+function recordFrameVolume(tabId, frameId, percent) {
+  if (tabId == null) return;
+  let frames = tabFrames.get(tabId);
+  if (!frames) {
+    frames = new Map();
+    tabFrames.set(tabId, frames);
+  }
+  frames.set(frameId ?? 0, percent);
+  refreshBadge(tabId);
 }
 
 api.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab?.id;
 
   if (message?.type === "vol-state") {
-    // A tab's volume/preset changed: reflect it on the icon and remember it.
-    setIndicator(tabId, message.volume);
+    // A frame's volume/preset changed: fold it into the tab's badge and remember
+    // it. (Storage is per-tab; when several frames are boosted the last write
+    // wins, which is fine — restore just needs a boost to re-apply on reload.)
+    recordFrameVolume(tabId, sender.frameId, message.volume);
     if (tabId != null) {
       api.storage.session
         .set({ [keyFor(tabId)]: { volume: message.volume, preset: message.preset } })
@@ -68,7 +95,7 @@ api.runtime.onMessage.addListener((message, sender) => {
   }
 
   if (message?.type === "vol-restore") {
-    // A tab just (re)loaded and wants whatever it had before, if anything.
+    // A frame just (re)loaded and wants whatever this tab had before, if anything.
     if (tabId == null) return Promise.resolve(null);
     return api.storage.session
       .get(keyFor(tabId))
@@ -79,8 +106,18 @@ api.runtime.onMessage.addListener((message, sender) => {
   return undefined;
 });
 
+// A top-level navigation (including a refresh) starts the tab's frames over, so
+// drop the stale per-frame volumes and clear the badge. The reloaded frames then
+// re-report (restoring from storage), repainting the badge from scratch.
+api.webNavigation?.onCommitted.addListener((details) => {
+  if (details.frameId !== 0) return; // only the main frame resets the whole tab
+  tabFrames.delete(details.tabId);
+  api.action.setBadgeText({ tabId: details.tabId, text: "" }).catch(() => {});
+});
+
 // Tidy up a tab's saved state when it closes (session storage would clear it on
 // browser exit anyway; this just keeps it from lingering during the session).
 api.tabs.onRemoved.addListener((tabId) => {
+  tabFrames.delete(tabId);
   api.storage.session.remove(keyFor(tabId)).catch(() => {});
 });

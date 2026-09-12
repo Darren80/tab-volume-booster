@@ -27,6 +27,8 @@ const statusHint = document.getElementById("statusHint");
 const stars = document.getElementById("stars");
 
 let activeTabId = null;
+let activeFrameId = 0; // the frame the popup drives — the one that actually has the media
+let framesHaveMedia = false; // did ANY reachable frame report media? (drives the warning)
 let currentPreset = "default";
 let tabAudible = false; // set by renderNowPlaying: is the current tab making sound?
 
@@ -87,9 +89,10 @@ function renderHint(state) {
     warn = true;
     message =
       "This site's audio is protected by DRM — boosting it MAY not work.";
-  } else if (tabAudible && !state.hasMedia) {
-    // Sound is coming from the tab, but from no media element the page exposes —
-    // almost always an embedded player inside a cross-origin iframe.
+  } else if (tabAudible && !framesHaveMedia) {
+    // Sound is coming from the tab, but NO frame we can reach exposes a media
+    // element — the audio lives in a frame we can't inject into (a sandboxed or
+    // otherwise privileged embed), so it's genuinely out of reach.
     warn = true;
     message =
       "The audio is playing inside an embedded player I can't reach — boosting it MAY not work.";
@@ -111,20 +114,64 @@ function renderHint(state) {
 
 async function ensureInjected(tabId) {
   try {
-    await api.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    // allFrames so embedded players (cross-origin iframes) get the script too.
+    await api.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["content.js"],
+    });
     return true;
   } catch (err) {
     return false; // privileged page (about:, addons.mozilla.org, PDF viewer, etc.)
   }
 }
 
+// Send to the ONE frame the popup is driving (the one that holds the media).
 async function send(message) {
   if (activeTabId == null) return null;
   try {
-    return await api.tabs.sendMessage(activeTabId, message);
+    return await api.tabs.sendMessage(activeTabId, message, { frameId: activeFrameId });
   } catch (err) {
     return null;
   }
+}
+
+// Send to a specific frame (used while probing every frame for its state).
+async function sendToFrame(frameId, message) {
+  if (activeTabId == null) return null;
+  try {
+    return await api.tabs.sendMessage(activeTabId, message, { frameId });
+  } catch (err) {
+    return null; // frame has no content script (privileged/sandboxed) or is gone
+  }
+}
+
+// Ask every frame in the tab for its state; keep the ones that answered.
+async function collectFrameStates(tabId) {
+  let frames;
+  try {
+    frames = await api.webNavigation.getAllFrames({ tabId });
+  } catch (err) {
+    frames = null;
+  }
+  if (!frames || !frames.length) frames = [{ frameId: 0 }]; // at least try the top frame
+  const results = await Promise.all(
+    frames.map(async (f) => ({
+      frameId: f.frameId,
+      state: await sendToFrame(f.frameId, { type: "get-state" }),
+    }))
+  );
+  return results.filter((r) => r.state?.ok);
+}
+
+// Choose which frame the popup should control: prefer one that actually has
+// media (preferring the top frame if it does), otherwise fall back to the top
+// frame so the controls still target something sane.
+function pickTargetFrame(states) {
+  const withMedia = states.filter((r) => r.state.hasMedia);
+  if (withMedia.length) {
+    return withMedia.find((r) => r.frameId === 0) ?? withMedia[0];
+  }
+  return states.find((r) => r.frameId === 0) ?? states[0] ?? null;
 }
 
 // --- Now-playing row ----------------------------------------------------
@@ -171,16 +218,17 @@ async function renderNowPlaying() {
 // Pages where no extension can ever run (Firefox blocks content scripts here).
 const RESTRICTED = /^(about:|moz-extension:|resource:|view-source:|chrome:|jar:|data:|https?:\/\/(addons|support)\.mozilla\.org)/i;
 
-// The content script is normally already present (declared in the manifest).
-// For tabs that were open before the add-on was installed/updated it won't be,
-// so we inject it once as a fallback. Returns the state, or null if unreachable.
+// The content script is normally already present in every frame (declared in the
+// manifest with all_frames). For tabs open before the add-on was installed it
+// won't be, so we inject it (into all frames) once as a fallback. Returns the
+// answering frames' states, or [] if the tab is unreachable.
 async function syncState(tabId) {
-  let state = await send({ type: "get-state" });
-  if (!state?.ok) {
+  let states = await collectFrameStates(tabId);
+  if (!states.length) {
     await ensureInjected(tabId);
-    state = await send({ type: "get-state" });
+    states = await collectFrameStates(tabId);
   }
-  return state;
+  return states;
 }
 
 async function init() {
@@ -201,15 +249,19 @@ async function init() {
   // Be optimistic: let the user drive the controls right away.
   setControlsEnabled(true);
 
-  const state = await syncState(tab.id);
-  if (state?.ok) {
+  const states = await syncState(tab.id);
+  const target = states.length ? pickTargetFrame(states) : null;
+  if (target) {
+    activeFrameId = target.frameId; // drive whichever frame holds the media
+    framesHaveMedia = states.some((r) => r.state.hasMedia); // any reachable frame?
+    const state = target.state;
     applyRange(state.minPercent, state.maxPercent, state.defaultPercent);
     renderVolume(state.volume);
     renderPreset(state.preset);
     renderHint(state);
   } else {
-    // Couldn't reach the content script (e.g. the page loaded before install).
-    // Don't block the user — show a gentle nudge and let them try.
+    // Couldn't reach the content script in any frame (e.g. page loaded before
+    // install). Don't block the user — show a gentle nudge and let them try.
     renderVolume(100);
     statusHint.hidden = false;
     statusHint.textContent =

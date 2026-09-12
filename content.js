@@ -122,26 +122,21 @@
   let engaged = false; // the user has asked us to take over
 
   // --- "Tricky" pages: audio we physically can't touch --------------------
-  // Some sites keep their sound out of our reach no matter what the slider says:
-  //   • DRM / EME streams (Netflix, Disney+, etc.) — the decoded audio never
-  //     passes through a WebAudio graph we're allowed to tap, so createMediaElement
-  //     Source either fails or produces silence.
-  //   • players living in a cross-origin <iframe> (embedded YouTube, etc.) — our
-  //     content script runs in the TOP document and can't see into the frame.
-  // We can't fix these; the popup shows an honest "out of my hands" warning.
+  // A small list of streaming services whose audio we genuinely can't boost:
+  // they use hardware-backed DRM on a protected media path that never reaches a
+  // WebAudio graph we're allowed to tap, so createMediaElementSource fails or
+  // yields silence. The popup turns a match into an honest "out of my hands"
+  // warning.
+  //
+  // NOTE: we deliberately do NOT flag DRM/EME in general. Plenty of DRM (e.g.
+  // software Widevine, as on bitmovin's demo) decodes to a normal <video> we CAN
+  // route, so boosting works — flagging all EME would cry wolf on those. Only the
+  // known-unreachable hosts below get the warning. (The other case we can't
+  // touch — a player inside a cross-origin <iframe>, like an embedded YouTube —
+  // is spotted in the popup instead: the tab is audible but exposes no media the
+  // top document can see.)
   const TRICKY_HOSTS =
     /(^|\.)(netflix\.com|disneyplus\.com|hulu\.com|max\.com|hbomax\.com|hbo\.com|primevideo\.com|amazon\.[a-z.]+|spotify\.com|peacocktv\.com|paramountplus\.com|crunchyroll\.com|tv\.apple\.com)$/i;
-
-  let drmDetected = false;
-  // The "encrypted" event fires when a media element is fed an EME/DRM stream —
-  // a reliable tell even on sites not in the host list above. Catch it once.
-  document.addEventListener(
-    "encrypted",
-    () => {
-      drmDetected = true;
-    },
-    { capture: true, passive: true }
-  );
 
   function isTrickyHost() {
     try {
@@ -149,15 +144,6 @@
     } catch (err) {
       return false;
     }
-  }
-
-  // DRM either announced itself via the "encrypted" event, or a media element has
-  // MediaKeys attached (EME in use).
-  function hasDrm() {
-    if (drmDetected) return true;
-    return [...document.querySelectorAll("video, audio")].some(
-      (el) => el.mediaKeys != null
-    );
   }
 
   // --- Graph -------------------------------------------------------------
@@ -430,12 +416,11 @@
       // boosted because it's cross-origin.
       pending: engaged && contextState !== "running" && counts.routable > 0,
       blockedMedia: counts.blocked,
-      // "tricky" = audio this add-on can't route no matter what: DRM/EME streams
-      // (host list or an encrypted media element). The popup turns this into an
-      // orange "out of my hands" warning. (The embedded cross-origin <iframe>
-      // case — audible tab, no media the top document can see — is detected in
-      // the popup, which knows whether the tab is making sound.)
-      tricky: isTrickyHost() || hasDrm(),
+      // "tricky" = a known streaming host whose DRM audio we can't route (see
+      // TRICKY_HOSTS). The popup turns this into an orange "out of my hands"
+      // warning. (The embedded cross-origin <iframe> case — audible tab, no media
+      // the top document can see — is detected in the popup instead.)
+      tricky: isTrickyHost(),
     };
   }
 
@@ -471,27 +456,56 @@
     isSoftClipEnabled: () => clipEnabled,
   };
 
+  const isTopFrame = window === window.top;
+  const frameHasMedia = () => !!document.querySelector("video, audio");
+
   // Restore this tab's last volume/preset (survives a refresh, since a refresh
-  // keeps the tab id). If there's nothing saved, report the default so any badge
-  // left over from a previous page in this tab is cleared.
+  // keeps the tab id). Since we now run in EVERY frame, we must be careful not to
+  // spin up an AudioContext in every empty subframe (a page can have dozens):
+  //   • The top frame always applies — it's the page the user is on, and applying
+  //     with no media just keeps the badge in sync (the graph stays silent).
+  //   • A subframe applies only once it actually has media, so an embedded player
+  //     (e.g. a YouTube iframe) re-boosts itself while ad/tracker frames stay
+  //     untouched. If its media hasn't appeared yet at document_idle, we watch
+  //     briefly and apply as soon as it shows up.
+  function applySaved(saved) {
+    if (saved.preset) applyPreset(saved.preset); // also engages the graph
+    setVolume(saved.volume); // applies the boost + refreshes badge
+  }
+
   function restoreState() {
     let pending;
     try {
       pending = api.runtime.sendMessage({ type: "vol-restore" });
     } catch (err) {
-      reportState();
+      if (isTopFrame) reportState();
       return;
     }
     Promise.resolve(pending)
       .then((saved) => {
-        if (saved && typeof saved.volume === "number") {
-          if (saved.preset) applyPreset(saved.preset); // also engages the graph
-          setVolume(saved.volume); // applies the boost + refreshes badge
-        } else {
-          reportState(); // nothing saved — clear any stale badge
+        if (!(saved && typeof saved.volume === "number")) {
+          // Nothing saved. Only the top frame clears a stale badge; a silent
+          // subframe stays quiet so it never clobbers a boosted sibling frame.
+          if (isTopFrame) reportState();
+          return;
         }
+        if (isTopFrame || frameHasMedia()) {
+          applySaved(saved);
+          return;
+        }
+        // Subframe with no media yet: wait for it to appear, then restore once.
+        const observer = new MutationObserver(() => {
+          if (frameHasMedia()) {
+            observer.disconnect();
+            applySaved(saved);
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => observer.disconnect(), 30000); // give up quietly if none shows
       })
-      .catch(() => reportState());
+      .catch(() => {
+        if (isTopFrame) reportState();
+      });
   }
 
   restoreState();
