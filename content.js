@@ -35,7 +35,7 @@
     //  change the number here.
     volume: {
       minPercent: 0,
-      maxPercent: 600, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
+      maxPercent: 1200, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
       defaultPercent: 100, // where a fresh tab starts (no boost, no cut)
     },
 
@@ -44,12 +44,18 @@
     //  and how wide it is; how hard each preset pushes them is set in `presets`.
     bassBand: {
       type: "lowshelf", // lifts/cuts EVERYTHING below `frequencyHz`
-      frequencyHz: 200, // shelf corner — raise for more mid-bass "punch", lower for deep "sub"
+      frequencyHz: 300, // shelf corner. Sits in the upper-bass/low-mids: high enough that
+      //                   the Bass preset's boost lands where laptop/earbud speakers can
+      //                   actually reproduce it, and that the Voice preset's cut trims
+      //                   lower-mid "boxiness" as well as rumble. Lower = deeper/sub-only.
     },
     voiceBand: {
       type: "peaking", // a bell centred on `frequencyHz`
-      frequencyHz: 2500, // the speech "presence" range (~2–4 kHz) that makes voices cut through
-      q: 1, // bell width — higher = narrower/more surgical, lower = broader
+      frequencyHz: 3000, // speech "presence": ~3 kHz is where consonant intelligibility
+      //                    lives and the ear is most sensitive, so a lift here makes voices
+      //                    cut through without just sounding louder.
+      q: 0.9, // bell width — broad enough (~1.5 octaves) to sound natural, not "telephone-y".
+      //         Higher = narrower/more surgical, lower = broader.
     },
 
     // ---- Presets: each sets the two bands' gain in DECIBELS. 0 dB = flat. ----
@@ -57,8 +63,9 @@
     //  Too subtle? Raise the numbers. Distorting/crackly? Lower them.
     presets: {
       default: { bassGainDb: 0, voiceGainDb: 0 }, // flat — no colouring at all
-      bass: { bassGainDb: 12, voiceGainDb: 0 }, // boomy, weighty low end
-      voice: { bassGainDb: -3, voiceGainDb: 8 }, // trims rumble, lifts speech clarity
+      bass: { bassGainDb: 14, voiceGainDb: 0 }, // boomy, weighty low end
+      voice: { bassGainDb: -5, voiceGainDb: 9 }, // de-muds the low end and lifts presence so
+      //                                            speech clearly cuts through, not just louder
     },
   };
   // ==========================================================================
