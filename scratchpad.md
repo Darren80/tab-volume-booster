@@ -1,0 +1,1 @@
+I want you to tell me what factors into the optimal boost percentage. Is it 600, 800, 1000, 400?

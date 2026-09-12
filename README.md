@@ -23,9 +23,11 @@ extension boosts audio the WebExtension-native way:
 - The graph is only engaged once you actually change something, so pages sound
   100 % native until then.
 
-**Permissions** are intentionally minimal: `activeTab`, `scripting`, `tabs`,
-`storage`. There is no always-on content script — it's injected into the active
-tab only when you open the popup.
+**Permissions:** `<all_urls>` (host) + a declared content script so the booster
+is reliably present on every normal page, plus `tabs` (to list/switch audible
+tabs), `scripting` (to inject into tabs that were already open before the add-on
+was installed), and `storage`. The "access your data for all websites" prompt is
+expected — a volume booster has to be able to run on whatever site you're on.
 
 ### Activation (important)
 

@@ -22,6 +22,47 @@
 
   const api = typeof browser !== "undefined" ? browser : chrome;
 
+  // ==========================================================================
+  //  SETTINGS  —  the only place with tunable numbers.
+  //  Every knob for the slider, Bass boost, and Voice boost lives here; the code
+  //  below only *references* these values (no magic numbers elsewhere). Edit a
+  //  value, then reload the add-on in about:debugging to hear the change.
+  // ==========================================================================
+  const SETTINGS = {
+    // ---- Volume slider range, in percent. 100 = the tab's normal volume. -----
+    //  This is the SINGLE source of truth for the ceiling: the popup asks the
+    //  content script for maxPercent and sizes its slider to match, so you only
+    //  change the number here.
+    volume: {
+      minPercent: 0,
+      maxPercent: 600, // how far the slider goes (600 = 6x loudness). See §"How high?" in README.
+      defaultPercent: 100, // where a fresh tab starts (no boost, no cut)
+    },
+
+    // ---- The two EQ bands the presets drive. --------------------------------
+    //  A "biquad" filter reshapes the sound. These define WHERE each band sits
+    //  and how wide it is; how hard each preset pushes them is set in `presets`.
+    bassBand: {
+      type: "lowshelf", // lifts/cuts EVERYTHING below `frequencyHz`
+      frequencyHz: 200, // shelf corner — raise for more mid-bass "punch", lower for deep "sub"
+    },
+    voiceBand: {
+      type: "peaking", // a bell centred on `frequencyHz`
+      frequencyHz: 2500, // the speech "presence" range (~2–4 kHz) that makes voices cut through
+      q: 1, // bell width — higher = narrower/more surgical, lower = broader
+    },
+
+    // ---- Presets: each sets the two bands' gain in DECIBELS. 0 dB = flat. ----
+    //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half.
+    //  Too subtle? Raise the numbers. Distorting/crackly? Lower them.
+    presets: {
+      default: { bassGainDb: 0, voiceGainDb: 0 }, // flat — no colouring at all
+      bass: { bassGainDb: 12, voiceGainDb: 0 }, // boomy, weighty low end
+      voice: { bassGainDb: -3, voiceGainDb: 8 }, // trims rumble, lifts speech clarity
+    },
+  };
+  // ==========================================================================
+
   let audioContext = null;
   let masterGain = null;
   let bassFilter = null;
@@ -32,7 +73,7 @@
   const wired = new WeakSet(); // elements routed through the graph
   const skipped = new WeakSet(); // elements we deliberately left native (cross-origin)
 
-  let currentVolume = 1.0; // gain multiplier: 1.0 == 100%
+  let currentVolume = SETTINGS.volume.defaultPercent / 100; // gain multiplier: 1.0 == 100%
   let currentPreset = "default";
   let engaged = false; // the user has asked us to take over
 
@@ -44,15 +85,15 @@
     audioContext = new AudioContextClass();
 
     bassFilter = audioContext.createBiquadFilter();
-    bassFilter.type = "lowshelf";
-    bassFilter.frequency.value = 200;
-    bassFilter.gain.value = 0;
+    bassFilter.type = SETTINGS.bassBand.type;
+    bassFilter.frequency.value = SETTINGS.bassBand.frequencyHz;
+    bassFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
     voiceFilter = audioContext.createBiquadFilter();
-    voiceFilter.type = "peaking";
-    voiceFilter.frequency.value = 2500;
-    voiceFilter.Q.value = 1;
-    voiceFilter.gain.value = 0;
+    voiceFilter.type = SETTINGS.voiceBand.type;
+    voiceFilter.frequency.value = SETTINGS.voiceBand.frequencyHz;
+    voiceFilter.Q.value = SETTINGS.voiceBand.q;
+    voiceFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
     masterGain = audioContext.createGain();
     masterGain.gain.value = currentVolume;
@@ -144,16 +185,9 @@
 
   function applyPresetNodes() {
     if (!bassFilter) return;
-    if (currentPreset === "bass") {
-      bassFilter.gain.value = 12;
-      voiceFilter.gain.value = 0;
-    } else if (currentPreset === "voice") {
-      bassFilter.gain.value = -3;
-      voiceFilter.gain.value = 8;
-    } else {
-      bassFilter.gain.value = 0;
-      voiceFilter.gain.value = 0;
-    }
+    const preset = SETTINGS.presets[currentPreset] || SETTINGS.presets.default;
+    bassFilter.gain.value = preset.bassGainDb;
+    voiceFilter.gain.value = preset.voiceGainDb;
   }
 
   // Bring the graph up, hook gestures, and take over if we already can. Never
@@ -167,7 +201,12 @@
   }
 
   function setVolume(percent) {
-    currentVolume = Math.max(0, percent) / 100;
+    // Clamp to the configured slider range (guards against stray messages).
+    const clamped = Math.min(
+      SETTINGS.volume.maxPercent,
+      Math.max(SETTINGS.volume.minPercent, percent)
+    );
+    currentVolume = clamped / 100;
     engage();
     if (masterGain) masterGain.gain.value = currentVolume;
     // Immediate <=100% control for elements we won't (or can't yet) route.
@@ -204,6 +243,10 @@
       ok: true,
       volume: Math.round(currentVolume * 100),
       preset: currentPreset,
+      // Volume range comes from SETTINGS so the popup slider is sized from one place.
+      minPercent: SETTINGS.volume.minPercent,
+      maxPercent: SETTINGS.volume.maxPercent,
+      defaultPercent: SETTINGS.volume.defaultPercent,
       hasMedia: counts.total > 0,
       engaged,
       contextState,

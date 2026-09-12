@@ -1,11 +1,17 @@
 // Tab Volume Booster - popup logic.
-// The popup owns the UI. It injects the content script into the active tab on
-// demand (activeTab grant) and talks to it over runtime messaging.
+// The popup owns the UI. The content script is normally already on the page
+// (declared in the manifest); the popup talks to it over runtime messaging and
+// only falls back to injecting it for tabs that predate the add-on.
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
-const MAX = 600;
-const STEP = 10;
+// These are only *fallbacks*. The real range is owned by the content script's
+// SETTINGS.volume block (content.js) and arrives via get-state, so the slider is
+// sized from one source. Change the ceiling there, not here.
+let MAX = 600; // max volume %
+let MIN = 0; // min volume %
+let DEFAULT = 100; // "normal"/reset volume %
+const STEP = 10; // how many % each arrow-key press nudges the volume
 
 const slider = document.getElementById("volume");
 const readout = document.getElementById("volumeReadout");
@@ -24,14 +30,29 @@ let currentPreset = "default";
 function setControlsEnabled(enabled) {
   slider.disabled = !enabled;
   presetButtons.forEach((b) => (b.disabled = !enabled));
-  resetButton.disabled = !enabled || Number(slider.value) === 100;
+  resetButton.disabled = !enabled || Number(slider.value) === DEFAULT;
+}
+
+// Size the slider and its end labels from the content script's range (called
+// once we have state). Keeps the ceiling defined in exactly one place.
+function applyRange(min, max, def) {
+  MIN = min;
+  MAX = max;
+  DEFAULT = def;
+  slider.min = MIN;
+  slider.max = MAX;
+  const minLabel = document.getElementById("sliderMin");
+  const maxLabel = document.getElementById("sliderMax");
+  if (minLabel) minLabel.textContent = `${MIN} %`;
+  if (maxLabel) maxLabel.textContent = `${MAX} %`;
 }
 
 function renderVolume(percent) {
   slider.value = percent;
   readout.textContent = `Volume: ${percent} %`;
-  slider.style.setProperty("--fill", `${(percent / MAX) * 100}%`);
-  resetButton.disabled = slider.disabled || percent === 100;
+  const span = MAX - MIN || 1;
+  slider.style.setProperty("--fill", `${((percent - MIN) / span) * 100}%`);
+  resetButton.disabled = slider.disabled || percent === DEFAULT;
 }
 
 function renderPreset(name) {
@@ -123,30 +144,53 @@ async function renderAudibleTabs() {
 
 // --- Init ---------------------------------------------------------------
 
+// Pages where no extension can ever run (Firefox blocks content scripts here).
+const RESTRICTED = /^(about:|moz-extension:|resource:|view-source:|chrome:|jar:|data:|https?:\/\/(addons|support)\.mozilla\.org)/i;
+
+// The content script is normally already present (declared in the manifest).
+// For tabs that were open before the add-on was installed/updated it won't be,
+// so we inject it once as a fallback. Returns the state, or null if unreachable.
+async function syncState(tabId) {
+  let state = await send({ type: "get-state" });
+  if (!state?.ok) {
+    await ensureInjected(tabId);
+    state = await send({ type: "get-state" });
+  }
+  return state;
+}
+
 async function init() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   if (tab) activeTabId = tab.id;
 
   await renderAudibleTabs();
 
-  const injected = tab ? await ensureInjected(tab.id) : false;
-  if (!injected) {
+  if (!tab || (tab.url && RESTRICTED.test(tab.url))) {
     setControlsEnabled(false);
-    readout.textContent = "Can't control audio here";
+    readout.textContent = "Not available on this page";
+    statusHint.hidden = false;
+    statusHint.textContent =
+      "Firefox doesn't allow add-ons to run here. Open a normal website (like a YouTube video) and reopen this.";
     return;
   }
 
-  const state = await send({ type: "get-state" });
-  if (!state?.ok) {
-    setControlsEnabled(false);
-    readout.textContent = "Can't control audio here";
-    return;
-  }
-
+  // Be optimistic: let the user drive the controls right away.
   setControlsEnabled(true);
-  renderVolume(state.volume);
-  renderPreset(state.preset);
-  renderHint(state);
+
+  const state = await syncState(tab.id);
+  if (state?.ok) {
+    applyRange(state.minPercent, state.maxPercent, state.defaultPercent);
+    renderVolume(state.volume);
+    renderPreset(state.preset);
+    renderHint(state);
+  } else {
+    // Couldn't reach the content script (e.g. the page loaded before install).
+    // Don't block the user — show a gentle nudge and let them try.
+    renderVolume(100);
+    statusHint.hidden = false;
+    statusHint.textContent =
+      "If the slider doesn't change the volume, reload this page once, then try again.";
+  }
 }
 
 // --- Event wiring -------------------------------------------------------
@@ -185,7 +229,7 @@ document.addEventListener("keydown", async (event) => {
   else return;
 
   event.preventDefault();
-  const percent = Math.min(MAX, Math.max(0, Number(slider.value) + delta));
+  const percent = Math.min(MAX, Math.max(MIN, Number(slider.value) + delta));
   renderVolume(percent);
   renderHint(await send({ type: "set-volume", value: percent }));
 });

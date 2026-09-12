@@ -71,10 +71,12 @@
           value="100"
           aria-label="Volume"
         />
+        <!-- End labels are filled in from the content script's configured range
+             (SETTINGS.volume in content.js); these are just initial text. -->
         <div class="slider-labels">
-          <span>0 %</span>
+          <span id="sliderMin">0 %</span>
           <span id="volumeReadout" class="readout">Volume: 100 %</span>
-          <span>600 %</span>
+          <span id="sliderMax">600 %</span>
         </div>
       </div>
 
