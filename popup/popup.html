@@ -36,16 +36,16 @@
             id="volume"
             class="slider"
             type="range"
-            min="0"
+            min="100"
             max="1200"
-            step="1"
+            step="10"
             value="100"
             aria-label="Volume"
           />
           <!-- End labels are filled in from the content script's configured range
                (SETTINGS.volume in content.js); these are just initial text. -->
           <div class="slider-labels">
-            <span id="sliderMin">0 %</span>
+            <span id="sliderMin">100 %</span>
             <span id="sliderMax">1200 %</span>
           </div>
         </div>
@@ -74,6 +74,7 @@
       </button>
 
       <section class="tabs">
+        <div id="nowPlayingLabel" class="section-label" hidden>Now playing</div>
         <ul id="tabsList" class="tabs-list" hidden></ul>
       </section>
 

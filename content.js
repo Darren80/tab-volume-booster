@@ -35,9 +35,9 @@
     //  content script for maxPercent and sizes its slider to match, so you only
     //  change the number here.
     volume: {
-      minPercent: 0,
+      minPercent: 100, // the floor: this add-on only boosts, never cuts below normal.
       maxPercent: 1200, // how far the slider goes (1200 = 12x loudness). See §"How high?" in README.
-      defaultPercent: 100, // where a fresh tab starts (no boost, no cut)
+      defaultPercent: 100, // where a fresh tab starts (no boost)
     },
 
     // ---- The two EQ bands the presets drive. --------------------------------
@@ -97,7 +97,7 @@
       //                live-toggle with setSoftClipEnabled() / the "set-softclip" message.
       kneeStartDb: -3, // below this level the sound is untouched; above it, saturation eases in.
       //                 Higher (e.g. -1) = cleaner/more transparent; lower (e.g. -9) = warmer, more driven.
-      ceilingDb: -0.5, // the hard ceiling output can never exceed — a hair under 0 dBFS for safety.
+      ceilingDb: -0.4, // the hard ceiling output can never exceed — a hair under 0 dBFS for safety.
       curveSamples: 16384, // resolution of the shaping lookup table (bigger = finer, costs a little memory).
       oversample: "4x", // "none" | "2x" | "4x": tames the aliasing that any clipping adds. 4x = smoothest.
     },
@@ -120,6 +120,45 @@
   let currentVolume = SETTINGS.volume.defaultPercent / 100; // gain multiplier: 1.0 == 100%
   let currentPreset = "default";
   let engaged = false; // the user has asked us to take over
+
+  // --- "Tricky" pages: audio we physically can't touch --------------------
+  // Some sites keep their sound out of our reach no matter what the slider says:
+  //   • DRM / EME streams (Netflix, Disney+, etc.) — the decoded audio never
+  //     passes through a WebAudio graph we're allowed to tap, so createMediaElement
+  //     Source either fails or produces silence.
+  //   • players living in a cross-origin <iframe> (embedded YouTube, etc.) — our
+  //     content script runs in the TOP document and can't see into the frame.
+  // We can't fix these; the popup shows an honest "out of my hands" warning.
+  const TRICKY_HOSTS =
+    /(^|\.)(netflix\.com|disneyplus\.com|hulu\.com|max\.com|hbomax\.com|hbo\.com|primevideo\.com|amazon\.[a-z.]+|spotify\.com|peacocktv\.com|paramountplus\.com|crunchyroll\.com|tv\.apple\.com)$/i;
+
+  let drmDetected = false;
+  // The "encrypted" event fires when a media element is fed an EME/DRM stream —
+  // a reliable tell even on sites not in the host list above. Catch it once.
+  document.addEventListener(
+    "encrypted",
+    () => {
+      drmDetected = true;
+    },
+    { capture: true, passive: true }
+  );
+
+  function isTrickyHost() {
+    try {
+      return TRICKY_HOSTS.test(location.hostname);
+    } catch (err) {
+      return false;
+    }
+  }
+
+  // DRM either announced itself via the "encrypted" event, or a media element has
+  // MediaKeys attached (EME in use).
+  function hasDrm() {
+    if (drmDetected) return true;
+    return [...document.querySelectorAll("video, audio")].some(
+      (el) => el.mediaKeys != null
+    );
+  }
 
   // --- Graph -------------------------------------------------------------
 
@@ -249,8 +288,9 @@
   function wireElement(element) {
     if (wired.has(element) || skipped.has(element)) return;
     if (!isRoutable(element)) {
+      // Cross-origin without CORS: we can't route it, and since we only ever
+      // boost (never cut), there's nothing to do to it — leave it fully native.
       skipped.add(element);
-      element.volume = Math.min(1, currentVolume); // best-effort attenuation
       return;
     }
     try {
@@ -348,12 +388,6 @@
     engage();
     if (masterGain) masterGain.gain.value = currentVolume; // OFF path gain
     updateShaperCurve(); // ON path: rebuild the soft-clip curve with the new boost baked in
-    // Immediate <=100% control for elements we won't (or can't yet) route.
-    document.querySelectorAll("video, audio").forEach((element) => {
-      if (!wired.has(element) && !isRoutable(element)) {
-        element.volume = Math.min(1, currentVolume);
-      }
-    });
   }
 
   function applyPreset(name) {
@@ -396,6 +430,12 @@
       // boosted because it's cross-origin.
       pending: engaged && contextState !== "running" && counts.routable > 0,
       blockedMedia: counts.blocked,
+      // "tricky" = audio this add-on can't route no matter what: DRM/EME streams
+      // (host list or an encrypted media element). The popup turns this into an
+      // orange "out of my hands" warning. (The embedded cross-origin <iframe>
+      // case — audible tab, no media the top document can see — is detected in
+      // the popup, which knows whether the tab is making sound.)
+      tricky: isTrickyHost() || hasDrm(),
     };
   }
 

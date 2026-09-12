@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Crescendo — Tab Volume Booster",
-  "version": "1.0.3",
-  "description": "Boost or lower the volume of the current tab up to 1200%, with Voice and Bass presets. Control it with the slider or arrow keys.",
+  "version": "1.0.4",
+  "description": "Boost the volume of the current tab up to 1200%, with Voice and Bass presets. Control it with the slider or arrow keys.",
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"

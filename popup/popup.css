@@ -24,8 +24,9 @@
   --shadow-card: 0 10px 30px rgba(60, 55, 80, 0.10);
   --shadow-btn: 0 1px 2px rgba(40, 38, 60, 0.10), 0 2px 6px rgba(40, 38, 60, 0.05);
 
-  /* Gauge/slider fill %, rewritten by popup.js as the volume changes. */
-  --fill: 16.6%;
+  /* Gauge/slider fill %, rewritten by popup.js as the volume changes.
+     Starts at 0% because 100% (the floor) means "no boost" = empty gauge. */
+  --fill: 0%;
 }
 
 * {
@@ -34,8 +35,8 @@
 
 body {
   margin: 0;
-  width: 384px;
-  min-height: 520px;
+  width: 424px;
+  min-height: 580px;
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   color: var(--ink);
   background:
@@ -45,7 +46,7 @@ body {
 }
 
 .app {
-  padding: 18px 16px 14px;
+  padding: 24px 22px 20px;
 }
 
 /* --- Top bar ----------------------------------------------------------- */
@@ -86,8 +87,8 @@ body {
 
 /* --- Hero: circular gauge + slider ------------------------------------ */
 .hero {
-  margin-top: 20px;
-  padding: 22px 20px 22px;
+  margin-top: 22px;
+  padding: 26px 24px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 22px;
@@ -95,8 +96,8 @@ body {
 }
 
 .dial {
-  width: 146px;
-  height: 146px;
+  width: 158px;
+  height: 158px;
   margin: 0 auto 4px;
   border-radius: 50%;
   background: conic-gradient(
@@ -109,8 +110,8 @@ body {
   transition: background 0.12s linear;
 }
 .dial-inner {
-  width: 118px;
-  height: 118px;
+  width: 128px;
+  height: 128px;
   border-radius: 50%;
   background: var(--panel);
   box-shadow: 0 2px 10px rgba(60, 55, 80, 0.06);
@@ -304,12 +305,27 @@ body {
   background: var(--tint);
   border-radius: 12px;
 }
+/* Orange "out of my hands" warning: DRM streams (Netflix, Disney+…), embedded
+   cross-origin players, and other audio this add-on physically can't reach.
+   Deep amber text (~6.5:1) on a soft amber panel. */
+.status-hint.warn {
+  color: #9a4b00;
+  background: rgba(249, 168, 37, 0.16);
+}
 
 /* --- Now-playing row --------------------------------------------------- */
 /* A single, non-interactive row for the current tab while it's making sound;
    hidden entirely when the tab is silent (popup.js toggles [hidden]). */
 .tabs {
   margin-top: 20px;
+}
+.section-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--muted);
+  margin-bottom: 9px;
 }
 .tabs-list {
   list-style: none;
@@ -345,7 +361,9 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 5px;
-  margin-top: 20px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border); /* divider above "Enjoying Crescendo?" */
 }
 .rate-label {
   font-size: 12.5px;

@@ -1,8 +1,8 @@
 // Tab Volume Booster - background (event page).
 // Two small jobs, both keyed to a TAB:
 //
-//   1. The toolbar badge — the number under the icon showing the tab's volume
-//      when it's boosted or cut.
+//   1. The toolbar badge — the small number in the corner of the icon showing the
+//      tab's volume when it's boosted.
 //   2. Per-tab memory — so a tab keeps its volume/preset across a refresh.
 //
 // Both live here because both need the tab id, which a content script can't see
@@ -11,11 +11,11 @@
 // (fresh tab, or after a refresh — a refresh keeps the SAME tab id) it asks us
 // to RESTORE, and we hand back whatever that tab last had.
 //
-// NOTE on the badge: Firefox draws the badge text in its own fixed system font,
-// so we can't make it bold or bigger — only set its colours. We tried painting a
-// custom icon with the number baked in (full control of weight/size), but at the
-// 16 px the toolbar actually renders, the number came out too small to read. The
-// badge's number is larger, so we use the badge and just give it strong colours.
+// The indicator is Firefox's plain, built-in badge: setBadgeText draws the number
+// in the corner of the toolbar icon. It's not pretty and Firefox controls its
+// font/size, but it's reliable and never touches the icon artwork itself. (An
+// earlier version PAINTED the number as the whole icon; that's been removed.) At
+// exactly 100% (normal volume) we clear the badge so the tab looks untouched.
 //
 // Storage is storage.session: it lives in memory for the browser session and is
 // wiped when the browser closes. That's exactly per-tab semantics — tab ids are
@@ -24,33 +24,30 @@
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
-// Badge look. Violet to match the popup's accent, white text for contrast.
-const BADGE_BG = "#6d5cff";
-const BADGE_TEXT_COLOR = "#ffffff";
-const DEFAULT_PERCENT = 100; // at exactly this we show NO badge (clean icon)
+const DEFAULT_PERCENT = 100; // at exactly this we clear the badge (normal volume)
+const BADGE_BG = "#16a34a"; // green tile behind the number, to match the icon's waves
+const BADGE_FG = "#ffffff"; // white number for contrast
 
 const keyFor = (tabId) => `tab-${tabId}`;
 
-function setBadge(tabId, percent) {
+function setIndicator(tabId, percent) {
   if (tabId == null) return;
-  // Only label a tab that's actually been pushed off normal volume.
+  // Boosted → show the number; normal volume → clear the badge. Each call is
+  // wrapped: a tab can vanish (closed/navigated) between the report and here,
+  // which rejects the promise — harmless, so swallow it.
   const text = percent === DEFAULT_PERCENT ? "" : String(percent);
-  // Wrap each call: a tab can vanish (closed/navigated) between the report and
-  // here, which rejects the promise — harmless, so swallow it.
   api.action.setBadgeText({ tabId, text }).catch(() => {});
-  if (text) {
-    api.action.setBadgeBackgroundColor({ tabId, color: BADGE_BG }).catch(() => {});
-    // setBadgeTextColor is Firefox/Chrome-recent; ignore if unavailable.
-    api.action.setBadgeTextColor?.({ tabId, color: BADGE_TEXT_COLOR }).catch(() => {});
-  }
+  api.action.setBadgeBackgroundColor({ tabId, color: BADGE_BG }).catch(() => {});
+  // setBadgeTextColor isn't in every build; ignore if unavailable.
+  api.action.setBadgeTextColor?.({ tabId, color: BADGE_FG }).catch(() => {});
 }
 
 api.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab?.id;
 
   if (message?.type === "vol-state") {
-    // A tab's volume/preset changed: reflect it on the badge and remember it.
-    setBadge(tabId, message.volume);
+    // A tab's volume/preset changed: reflect it on the icon and remember it.
+    setIndicator(tabId, message.volume);
     if (tabId != null) {
       api.storage.session
         .set({ [keyFor(tabId)]: { volume: message.volume, preset: message.preset } })

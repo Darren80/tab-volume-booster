@@ -1,15 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7c6cff"/>
-      <stop offset="1" stop-color="#29d3ee"/>
-    </linearGradient>
-  </defs>
-  <rect x="6" y="6" width="84" height="84" rx="22" fill="url(#g)"/>
-  <g fill="#ffffff">
-    <rect x="25" y="52" width="10" height="20" rx="5"/>
-    <rect x="43" y="40" width="10" height="32" rx="5"/>
-    <rect x="61" y="34" width="10" height="38" rx="5"/>
+  <!-- No background: the tile is transparent. -->
+  <!-- Speaker cone: white fill with a thin dark outline so it stays visible on
+       both light and dark toolbars. -->
+  <path d="M18 40 H32 L52 24 V72 L32 56 H18 Z" fill="#ffffff"
+        stroke="#0f172a" stroke-width="3.5" stroke-linejoin="round"/>
+  <!-- Three sound waves, green, growing outward. -->
+  <g fill="none" stroke="#22c55e" stroke-width="6" stroke-linecap="round">
+    <path d="M60 40 Q68 48 60 56"/>
+    <path d="M70 33 Q83 48 70 63"/>
+    <path d="M80 26 Q98 48 80 70"/>
   </g>
-  <path d="M66 16 L74 27 L58 27 Z" fill="#ffffff"/>
 </svg>

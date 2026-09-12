@@ -9,7 +9,7 @@ const api = typeof browser !== "undefined" ? browser : chrome;
 // SETTINGS.volume block (content.js) and arrives via get-state, so the slider is
 // sized from one source. Change the ceiling there, not here.
 let MAX = 1200; // max volume %
-let MIN = 0; // min volume %
+let MIN = 100; // min volume % (boost-only: normal volume is the floor)
 let DEFAULT = 100; // "normal"/reset volume %
 
 // Where the star rating sends people. Once the add-on is live on AMO, replace
@@ -22,11 +22,13 @@ const readout = document.getElementById("volumeReadout");
 const resetButton = document.getElementById("reset");
 const presetButtons = [...document.querySelectorAll(".preset")];
 const tabsList = document.getElementById("tabsList");
+const nowPlayingLabel = document.getElementById("nowPlayingLabel");
 const statusHint = document.getElementById("statusHint");
 const stars = document.getElementById("stars");
 
 let activeTabId = null;
 let currentPreset = "default";
+let tabAudible = false; // set by renderNowPlaying: is the current tab making sound?
 
 function setControlsEnabled(enabled) {
   slider.disabled = !enabled;
@@ -70,16 +72,39 @@ function renderPreset(name) {
 function renderHint(state) {
   if (!state) {
     statusHint.hidden = true;
+    statusHint.classList.remove("warn");
     return;
   }
+
+  // `warn` messages are the honest "out of my hands" cases — audio this add-on
+  // physically can't touch — and render in orange. Everything else is a neutral
+  // (violet) informational nudge.
   let message = "";
-  if (state.blockedMedia > 0) {
-    message = "This audio is from another site and can't be boosted above 100%.";
+  let warn = false;
+
+  if (state.tricky) {
+    // DRM/EME stream (Netflix, Disney+, and the like).
+    warn = true;
+    message =
+      "This site's audio is protected by DRM — boosting it MAY not work.";
+  } else if (tabAudible && !state.hasMedia) {
+    // Sound is coming from the tab, but from no media element the page exposes —
+    // almost always an embedded player inside a cross-origin iframe.
+    warn = true;
+    message =
+      "This audio plays inside an embedded player I can't reach — boosting it MAY not work.";
+  } else if (state.blockedMedia > 0) {
+    // Media loaded from another site without CORS: unroutable.
+    warn = true;
+    message =
+      "Some audio here comes from another site I'm not allowed to touch — boosting it MAY not work.";
   } else if (state.engaged && !state.hasMedia) {
     message = "No audio or video found on this page yet.";
   }
+
   statusHint.textContent = message;
   statusHint.hidden = message === "";
+  statusHint.classList.toggle("warn", warn && message !== "");
 }
 
 // --- Messaging with the active tab's content script ---------------------
@@ -115,8 +140,11 @@ async function renderNowPlaying() {
     currentWindow: true,
     audible: true,
   });
+  tabAudible = !!tab; // remembered so renderHint can spot the "audible but no reachable media" case
   if (!tab) {
-    tabsList.hidden = true; // this tab is silent — show nothing at all
+    // this tab is silent — show nothing at all (no label, no row)
+    tabsList.hidden = true;
+    nowPlayingLabel.hidden = true;
     return;
   }
 
@@ -135,6 +163,7 @@ async function renderNowPlaying() {
   li.append(icon, title);
   tabsList.appendChild(li);
   tabsList.hidden = false;
+  nowPlayingLabel.hidden = false;
 }
 
 // --- Init ---------------------------------------------------------------
@@ -190,32 +219,24 @@ async function init() {
 
 // --- Event wiring -------------------------------------------------------
 
-// --- Variable step: fine below 100 %, coarse above -----------------------
-// Below the default the slider moves in 1 % steps; at/above it, in 10 % steps.
-// Boosting is a blunt instrument (10 % is barely audible), while trimming below
-// 100 % wants precision — so the grid coarsens exactly where 100 % begins.
-const COARSE_FROM = 100; // the boundary: fine steps below it, coarse at/above
+// --- Slider step ---------------------------------------------------------
+// The slider only ever boosts (100 % → MAX), so it moves in a single coarse
+// 10 % grid the whole way: 10 % is about the smallest boost step that's audible,
+// and there's no sub-100 % region left that would need finer control.
+const STEP = 10;
 
 function clampVol(v) {
   return Math.min(MAX, Math.max(MIN, v));
 }
 
-// Snap a raw value to the nearest valid stop for where it sits: to the nearest
-// 1 below the boundary, to the nearest 10 at/above it. Used while dragging.
+// Snap a raw value to the nearest 10 %. Used while dragging.
 function snapVol(v) {
-  const snapped = v < COARSE_FROM ? Math.round(v) : Math.round(v / 10) * 10;
-  return clampVol(snapped);
+  return clampVol(Math.round(v / STEP) * STEP);
 }
 
-// Move one stop up or down from `from`, honouring the coarse/fine boundary so
-// arrow keys land cleanly on 99 → 100 → 110. Used for keyboard nudges.
+// Move one 10 % stop up or down. Used for keyboard nudges.
 function stepVol(from, dir) {
-  if (dir > 0) {
-    const step = from >= COARSE_FROM ? 10 : 1; // 99→100 (fine), 100→110 (coarse)
-    return clampVol(from + step);
-  }
-  const step = from > COARSE_FROM ? 10 : 1; // 110→100 (coarse), 100→99 (fine)
-  return clampVol(from - step);
+  return clampVol(from + (dir > 0 ? STEP : -STEP));
 }
 
 // One place to apply a new volume: reflect it in the UI and tell the tab.
