@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Tab Volume Booster</title>
+  </head>
+  <body>
+    <div class="card">
+      <header class="header">
+        <div class="brand">
+          <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M3 9v6h4l5 5V4L7 9H3z"
+              fill="currentColor"
+            />
+            <path
+              d="M16 8.5a4 4 0 0 1 0 7"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+            <path
+              d="M18.5 6a7.5 7.5 0 0 1 0 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+          </svg>
+          <h1>Tab Volume Booster</h1>
+        </div>
+        <button id="tipToggle" class="icon-button" title="Show tip" aria-label="Show tip">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7z M19.4 13a7.5 7.5 0 0 0 .05-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.35-2.6h-4l-.35 2.6c-.6.25-1.17.58-1.7 1l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.53.42 1.1.75 1.7 1l.35 2.6h4l.35-2.6c.6-.25 1.17-.58 1.7-1l2.4 1 2-3.4-2-1.6z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+      </header>
+
+      <p class="subtitle">
+        Use the slider below to control the volume of the current tab.
+      </p>
+
+      <div id="tip" class="tip" hidden>
+        <button id="tipClose" class="tip-close" aria-label="Dismiss tip">&times;</button>
+        <strong>Tip: adjust volume with arrow keys</strong>
+        <div class="tip-row">
+          <span class="key">↑</span> or <span class="key">→</span> to volume up
+        </div>
+        <div class="tip-row">
+          <span class="key">↓</span> or <span class="key">←</span> to volume down
+        </div>
+      </div>
+
+      <div class="slider-block">
+        <input
+          id="volume"
+          class="slider"
+          type="range"
+          min="0"
+          max="600"
+          step="1"
+          value="100"
+          aria-label="Volume"
+        />
+        <div class="slider-labels">
+          <span>0 %</span>
+          <span id="volumeReadout" class="readout">Volume: 100 %</span>
+          <span>600 %</span>
+        </div>
+      </div>
+
+      <div class="presets">
+        <button class="preset" data-preset="default">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
+          Default
+        </button>
+        <button class="preset" data-preset="voice">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z" fill="currentColor"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Voice boost
+        </button>
+        <button class="preset" data-preset="bass">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l4-1 3 6 4-14 2 8 3-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Bass boost
+        </button>
+      </div>
+
+      <p id="statusHint" class="status-hint" hidden></p>
+
+      <button id="reset" class="reset" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
+        Reset to 100 % volume
+      </button>
+
+      <div id="tabs" class="tabs">
+        <p id="tabsEmpty" class="tabs-empty">No tabs playing audio right now</p>
+        <ul id="tabsList" class="tabs-list" hidden></ul>
+      </div>
+
+      <footer class="footer">
+        <div class="stars" aria-hidden="true">★★★★★</div>
+        <p class="credit">Made with <span class="heart">♥</span> — a Firefox volume booster</p>
+      </footer>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
