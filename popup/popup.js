@@ -11,15 +11,11 @@ const api = typeof browser !== "undefined" ? browser : chrome;
 let MAX = 600; // max volume %
 let MIN = 0; // min volume %
 let DEFAULT = 100; // "normal"/reset volume %
-const STEP = 10; // how many % each arrow-key press nudges the volume
 
 const slider = document.getElementById("volume");
 const readout = document.getElementById("volumeReadout");
 const resetButton = document.getElementById("reset");
 const presetButtons = [...document.querySelectorAll(".preset")];
-const tip = document.getElementById("tip");
-const tipToggle = document.getElementById("tipToggle");
-const tipClose = document.getElementById("tipClose");
 const tabsEmpty = document.getElementById("tabsEmpty");
 const tabsList = document.getElementById("tabsList");
 const statusHint = document.getElementById("statusHint");
@@ -220,41 +216,4 @@ resetButton.addEventListener("click", async () => {
   }
 });
 
-// Arrow keys anywhere in the popup nudge the volume.
-document.addEventListener("keydown", async (event) => {
-  if (slider.disabled) return;
-  let delta = 0;
-  if (event.key === "ArrowUp" || event.key === "ArrowRight") delta = STEP;
-  else if (event.key === "ArrowDown" || event.key === "ArrowLeft") delta = -STEP;
-  else return;
-
-  event.preventDefault();
-  const percent = Math.min(MAX, Math.max(MIN, Number(slider.value) + delta));
-  renderVolume(percent);
-  renderHint(await send({ type: "set-volume", value: percent }));
-});
-
-// Tip visibility (remembered across opens).
-tipToggle.addEventListener("click", () => setTipHidden(!tip.hidden ? true : false));
-tipClose.addEventListener("click", () => setTipHidden(true));
-
-function setTipHidden(hidden) {
-  tip.hidden = hidden;
-  try {
-    api.storage.local.set({ tipHidden: hidden });
-  } catch (err) {
-    /* storage may be unavailable in private windows */
-  }
-}
-
-async function restoreTip() {
-  try {
-    const { tipHidden } = await api.storage.local.get("tipHidden");
-    tip.hidden = Boolean(tipHidden);
-  } catch (err) {
-    tip.hidden = false;
-  }
-}
-
-restoreTip();
 init();
