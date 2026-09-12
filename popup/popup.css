@@ -2,8 +2,12 @@
   /* Accent gradient — violet to cyan, the signature of the UI. */
   --acc1: #7c6cff;
   --acc2: #29d3ee;
-  --acc-solid: #6d5cff;
-  --tint: rgba(124, 108, 255, 0.10);
+  --acc-solid: #6d5cff; /* vibrant fill for the slider thumb / active chips (on their own bg) */
+  /* Darker accent for accent-COLOURED TEXT on light backgrounds (links, hints):
+     #6d5cff is only ~4.5:1 on white and worse on the tinted hint panel, so text
+     uses this deeper violet (~7.7:1) while fills keep the brighter --acc-solid. */
+  --acc-ink: #4a39c9;
+  --tint: rgba(124, 108, 255, 0.14);
 
   /* Bright, minimal light palette. */
   --panel: #ffffff;
@@ -11,7 +15,10 @@
   --border: #ebedf3;
   --btn-border: #d9dce6;
   --ink: #21232e;
-  --muted: #8a8f9e;
+  /* Secondary text. Was #8a8f9e (~3.1:1 on white — fails WCAG AA); darkened to
+     ~6:1 so every muted label (tags, slider ends, section labels, footer) is
+     comfortably readable while still clearly secondary to --ink. */
+  --muted: #5b616f;
   --track: #e4e6ee;
   --ring-track: #eef0f6;
   --shadow-card: 0 10px 30px rgba(60, 55, 80, 0.10);
@@ -27,7 +34,7 @@
 
 body {
   margin: 0;
-  width: 340px;
+  width: 384px;
   min-height: 520px;
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   color: var(--ink);
@@ -117,7 +124,10 @@ body {
   font-weight: 800;
   letter-spacing: -1.5px;
   line-height: 1;
-  background: linear-gradient(135deg, var(--acc1), var(--acc2));
+  /* Deeper violet→teal than the brand --acc1/--acc2: the bright cyan tail was
+     nearly invisible on the white dial, so the "%" and right-hand digits washed
+     out. These darker stops keep the gradient identity but stay legible. */
+  background: linear-gradient(120deg, #5b46f0 0%, #0f97b8 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -268,11 +278,11 @@ body {
 }
 .reset:hover:not(:disabled) {
   border-color: var(--acc-solid);
-  color: var(--acc-solid);
+  color: var(--acc-ink);
   box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14);
 }
 .reset:hover:not(:disabled) svg {
-  color: var(--acc-solid);
+  color: var(--acc-ink);
 }
 .reset:active:not(:disabled) {
   transform: translateY(1px);
@@ -288,8 +298,9 @@ body {
   margin: 13px 0 0;
   padding: 10px 12px;
   font-size: 12px;
+  font-weight: 500;
   line-height: 1.4;
-  color: var(--acc-solid);
+  color: var(--acc-ink); /* deep violet — reads clearly on the light --tint panel */
   background: var(--tint);
   border-radius: 12px;
 }
@@ -369,34 +380,60 @@ body {
   color: var(--ink);
 }
 .stars {
-  /* The whole row is one link to the store, so it fills as a unit — a partial
-     per-star fill would wrongly imply the click submits that many stars. */
   display: inline-flex;
   justify-content: center;
   gap: 3px;
-  cursor: pointer;
-  border-radius: 8px;
-  outline: none;
 }
-.stars .star {
+/* Each star is its own button now: 1–2 opens a "contact us first" note, 3–5
+   goes to the store. So the fill IS meaningful — popup.js lights up stars 1..N
+   (the .filled class) on hover/focus/selection to preview the score. */
+.star {
+  border: none;
+  background: none;
+  padding: 2px;
+  margin: 0;
+  line-height: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.star svg {
+  display: block;
   width: 26px;
   height: 26px;
-  fill: var(--track);
+  fill: #b4b9c6; /* visible placeholder grey (was --track #e4e6ee — near-invisible on white) */
   transition: fill 0.1s ease, transform 0.1s ease;
 }
-.stars:hover .star,
-.stars:focus-visible .star {
+.star.filled svg {
   fill: #ffb400;
 }
-.stars:hover .star {
-  transform: scale(1.04);
+.star:hover svg {
+  transform: scale(1.08);
 }
-.stars:focus-visible {
+.star:focus-visible {
+  outline: none;
   box-shadow: 0 0 0 3px var(--tint);
 }
 .rate-hint {
   font-size: 11px;
   color: var(--muted);
+}
+.rate-feedback {
+  margin: 6px 2px 0;
+  padding: 9px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  color: var(--ink);
+  background: var(--panel-2);
+  border-radius: 11px;
+}
+.rate-feedback a {
+  color: var(--acc-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+.rate-feedback a:hover {
+  text-decoration: underline;
 }
 
 /* --- Footer ------------------------------------------------------------ */
@@ -420,7 +457,7 @@ body {
   flex: 0 0 auto;
 }
 .footer a {
-  color: var(--acc-solid);
+  color: var(--acc-ink);
   font-weight: 600;
   text-decoration: none;
 }

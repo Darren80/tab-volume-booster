@@ -290,18 +290,39 @@ resetButton.addEventListener("click", async () => {
   }
 });
 
-// Rating: open the store's review page in a new tab. It's a single link, so
-// clicking any star (or activating it by keyboard) does the same thing.
-function openReview() {
-  api.tabs.create({ url: REVIEW_URL });
-  window.close();
+// Rating. Each star carries a value 1–5. A happy rating (3–5) goes to the store;
+// a low one (1–2) is intercepted — instead of sending an unhappy user straight
+// to a public review, we surface our email and ask them to reach out first.
+const starEls = [...stars.querySelectorAll(".star")];
+const rateHint = document.getElementById("rateHint");
+const rateFeedback = document.getElementById("rateFeedback");
+
+// Light up stars 1..n to preview a score (0 clears them).
+function paintStars(n) {
+  starEls.forEach((el, i) => el.classList.toggle("filled", i < n));
 }
-stars.addEventListener("click", openReview);
-stars.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    openReview();
+
+function rate(value) {
+  if (value <= 2) {
+    paintStars(value); // leave the chosen stars lit as acknowledgement
+    rateHint.hidden = true;
+    rateFeedback.hidden = false; // show the "contact us first" note; stay in the popup
+  } else {
+    api.tabs.create({ url: REVIEW_URL });
+    window.close();
   }
+}
+
+starEls.forEach((el) => {
+  const value = Number(el.dataset.value);
+  el.addEventListener("mouseenter", () => paintStars(value));
+  el.addEventListener("focus", () => paintStars(value));
+  el.addEventListener("click", () => rate(value));
+});
+// Clear the hover preview when the pointer or focus leaves the row.
+stars.addEventListener("mouseleave", () => paintStars(0));
+stars.addEventListener("focusout", (event) => {
+  if (!stars.contains(event.relatedTarget)) paintStars(0);
 });
 
 init();

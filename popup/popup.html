@@ -60,11 +60,11 @@
         </button>
         <button class="preset" data-preset="voice">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z" fill="currentColor"/><path d="M6 11a6 6 0 0 0 12 0M12 17v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          <span>Voice</span>
+          <span>Voice boost</span>
         </button>
         <button class="preset" data-preset="bass">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l4-1 3 6 4-14 2 8 3-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Bass</span>
+          <span>Bass boost</span>
         </button>
       </div>
 
@@ -81,14 +81,19 @@
 
       <section class="rate">
         <span class="rate-label">Enjoying Crescendo?</span>
-        <div id="stars" class="stars" role="link" tabindex="0" title="Rate this extension" aria-label="Rate this extension on the add-ons store">
-          <svg class="star" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg>
-          <svg class="star" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg>
-          <svg class="star" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg>
-          <svg class="star" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg>
-          <svg class="star" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg>
+        <div id="stars" class="stars" role="radiogroup" aria-label="Rate this extension">
+          <button class="star" type="button" data-value="1" aria-label="Rate 1 star"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg></button>
+          <button class="star" type="button" data-value="2" aria-label="Rate 2 stars"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg></button>
+          <button class="star" type="button" data-value="3" aria-label="Rate 3 stars"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg></button>
+          <button class="star" type="button" data-value="4" aria-label="Rate 4 stars"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg></button>
+          <button class="star" type="button" data-value="5" aria-label="Rate 5 stars"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.9l-5.8 3.05 1.1-6.45-4.7-4.6 6.5-.95z"/></svg></button>
         </div>
-        <span class="rate-hint">Rate this extension</span>
+        <span id="rateHint" class="rate-hint">Rate this extension</span>
+        <p id="rateFeedback" class="rate-feedback" hidden>
+          Sorry it's falling short. Tell us what's wrong at
+          <a href="mailto:darren.ohonba@gmail.com">darren.ohonba@gmail.com</a>
+          — we'd love to fix it before you leave a review.
+        </p>
       </section>
 
       <footer class="footer">

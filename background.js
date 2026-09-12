@@ -1,8 +1,8 @@
 // Tab Volume Booster - background (event page).
 // Two small jobs, both keyed to a TAB:
 //
-//   1. The toolbar badge — the little number under the icon showing the tab's
-//      volume when it's boosted or cut.
+//   1. The toolbar badge — the number under the icon showing the tab's volume
+//      when it's boosted or cut.
 //   2. Per-tab memory — so a tab keeps its volume/preset across a refresh.
 //
 // Both live here because both need the tab id, which a content script can't see
@@ -11,6 +11,12 @@
 // (fresh tab, or after a refresh — a refresh keeps the SAME tab id) it asks us
 // to RESTORE, and we hand back whatever that tab last had.
 //
+// NOTE on the badge: Firefox draws the badge text in its own fixed system font,
+// so we can't make it bold or bigger — only set its colours. We tried painting a
+// custom icon with the number baked in (full control of weight/size), but at the
+// 16 px the toolbar actually renders, the number came out too small to read. The
+// badge's number is larger, so we use the badge and just give it strong colours.
+//
 // Storage is storage.session: it lives in memory for the browser session and is
 // wiped when the browser closes. That's exactly per-tab semantics — tab ids are
 // only meaningful within a session, so a value can never leak onto a reused id
@@ -18,9 +24,7 @@
 
 const api = typeof browser !== "undefined" ? browser : chrome;
 
-// Badge look. Violet to match the popup's accent (--acc-solid). Firefox draws
-// the badge as a pill under/over the icon; text longer than ~4 chars is
-// truncated, and "1200" already fills it, so we never need more room.
+// Badge look. Violet to match the popup's accent, white text for contrast.
 const BADGE_BG = "#6d5cff";
 const BADGE_TEXT_COLOR = "#ffffff";
 const DEFAULT_PERCENT = 100; // at exactly this we show NO badge (clean icon)
