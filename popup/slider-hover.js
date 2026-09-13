@@ -104,23 +104,38 @@ function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
 
   // --- Circular gauge: wheel anywhere inside the ring ---------------------
   // Hit-test against the circle (not its bounding box) so the corners outside
-  // the ring don't count. A wheel here also bubbles to the zone handler above,
-  // but that returns early because the dial sits well outside nearSlider.
+  // the ring don't count. The wheel and the cursor share this one test, so the
+  // ↕ cursor appears exactly where scrolling actually adjusts the volume.
+  // A wheel here also bubbles to the zone handler above, but that returns early
+  // because the dial sits well outside nearSlider.
   const dial = document.querySelector(dialSelector);
   if (dial) {
+    // Is the pointer inside the inscribed circle (and the control live)?
+    function insideDial(event) {
+      if (slider.disabled) return false;
+      const dialBox = dial.getBoundingClientRect();
+      const radius = dialBox.width / 2;
+      const offsetX = event.clientX - (dialBox.left + radius);
+      const offsetY = event.clientY - (dialBox.top + radius);
+      return Math.hypot(offsetX, offsetY) <= radius;
+    }
+
     dial.addEventListener(
       "wheel",
       (event) => {
-        if (slider.disabled) return;
-        const dialBox = dial.getBoundingClientRect();
-        const radiusX = dialBox.width / 2;
-        const radiusY = dialBox.height / 2;
-        const offsetX = event.clientX - (dialBox.left + radiusX);
-        const offsetY = event.clientY - (dialBox.top + radiusY);
-        if (Math.hypot(offsetX, offsetY) > radiusX) return; // outside the circle
+        if (!insideDial(event)) return; // outside the circle, or disabled
         wheelNudge(event);
       },
       { passive: false }
     );
+
+    // ns-resize (↕) signals scroll-up/down to change the value — the dial is
+    // wheel-only, so "pointer" (click me) would misdescribe it.
+    dial.addEventListener("pointermove", (event) => {
+      dial.style.cursor = insideDial(event) ? "ns-resize" : "";
+    });
+    dial.addEventListener("pointerleave", () => {
+      dial.style.cursor = "";
+    });
   }
 }
