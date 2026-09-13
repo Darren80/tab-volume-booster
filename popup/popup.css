@@ -1,518 +1,92 @@
-:root {
-  /* Accent gradient — violet to cyan, the signature of the UI. */
-  --acc1: #7c6cff;
-  --acc2: #29d3ee;
-  --acc-solid: #6d5cff; /* vibrant fill for the slider thumb / active chips (on their own bg) */
-  /* Darker accent for accent-COLOURED TEXT on light backgrounds (links, hints):
-     #6d5cff is only ~4.5:1 on white and worse on the tinted hint panel, so text
-     uses this deeper violet (~7.7:1) while fills keep the brighter --acc-solid. */
-  --acc-ink: #4a39c9;
-  --tint: rgba(124, 108, 255, 0.14);
+/* Design tokens (:root) — accent gradient, light palette, shadows, --fill gauge % */
+:root { --acc1: #7c6cff; --acc2: #29d3ee; --acc-solid: #6d5cff; --acc-ink: #4a39c9; --tint: rgba(124, 108, 255, 0.14); --panel: #ffffff; --panel-2: #f5f6fa; --border: #dbdde3; --btn-border: #d9dce6; --ink: #21232e; --muted: #5b616f; --track: #e4e6ee; --ring-track: #eef0f6; --shadow-card: 0 10px 30px rgba(60, 55, 80, 0.10); --shadow-btn: 0 1px 2px rgba(40, 38, 60, 0.10), 0 2px 6px rgba(40, 38, 60, 0.05); --fill: 0%; }
 
-  /* Bright, minimal light palette. */
-  --panel: #ffffff;
-  --panel-2: #f5f6fa;
-  --border: #ebedf3;
-  --btn-border: #d9dce6;
-  --ink: #21232e;
-  /* Secondary text. Was #8a8f9e (~3.1:1 on white — fails WCAG AA); darkened to
-     ~6:1 so every muted label (tags, slider ends, section labels, footer) is
-     comfortably readable while still clearly secondary to --ink. */
-  --muted: #5b616f;
-  --track: #e4e6ee;
-  --ring-track: #eef0f6;
-  --shadow-card: 0 10px 30px rgba(60, 55, 80, 0.10);
-  --shadow-btn: 0 1px 2px rgba(40, 38, 60, 0.10), 0 2px 6px rgba(40, 38, 60, 0.05);
+/* Base reset + <body> panel (424px fixed width) and .app padding wrapper */
+* { box-sizing: border-box; }
+body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; color: var(--ink); background: radial-gradient(135% 75% at 50% -12%, #f2f0ff 0%, rgba(242, 240, 255, 0) 58%), radial-gradient(120% 90% at 100% 6%, #e7fbff 0%, rgba(231, 251, 255, 0) 46%), #ffffff; }
+.app { padding: 24px 22px 20px; }
 
-  /* Gauge/slider fill %, rewritten by popup.js as the volume changes.
-     Starts at 0% because 100% (the floor) means "no boost" = empty gauge. */
-  --fill: 0%;
-}
+/* <header class="topbar"> — logo tile + brand name/tag */
+.topbar { display: flex; align-items: center; gap: 11px; }
+.logo { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 13px; color: #fff; background: linear-gradient(135deg, var(--acc1), var(--acc2)); box-shadow: 0 6px 16px rgba(109, 92, 255, 0.32); flex: 0 0 auto; }
+.logo svg { width: 23px; height: 23px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-name { font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+.brand-tag { font-size: 11.5px; color: var(--muted); }
 
-* {
-  box-sizing: border-box;
-}
+/* <section class="hero"> — card with the circular volume dial */
+.hero { margin-top: 22px; padding: 26px 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow-card); }
+.dial { width: 158px; height: 158px; margin: 0 auto 4px; border-radius: 50%; background: conic-gradient(var(--acc1) 0, var(--acc2) var(--fill), var(--ring-track) var(--fill)); display: grid; place-items: center; transition: background 0.12s linear; }
+.dial-inner { width: 128px; height: 128px; border-radius: 50%; background: var(--panel); box-shadow: 0 2px 10px rgba(60, 55, 80, 0.06); display: grid; place-items: center; align-content: center; gap: 2px; }
+.dial-value { font-size: 37px; font-weight: 800; letter-spacing: -1.5px; line-height: 1; background: linear-gradient(120deg, #5b46f0 0%, #0f97b8 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.dial-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); }
 
-body {
-  margin: 0;
-  /* Desktop opens the popup at a fixed 424px panel; Firefox for Android opens it
-     full-screen, so cap the width but let it shrink to the phone's viewport
-     (a hard 424px would overflow a ~360px screen and force horizontal scroll). */
-  width: 424px;
-  /* max-width: 100vw; */
-  min-height: 580px;
-  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
-  color: var(--ink);
-  background:
-    radial-gradient(135% 75% at 50% -12%, #f2f0ff 0%, rgba(242, 240, 255, 0) 58%),
-    radial-gradient(120% 90% at 100% 6%, #e7fbff 0%, rgba(231, 251, 255, 0) 46%),
-    #ffffff;
-}
+/* .slider-wrap — #volume range input, thumbs, states, end labels */
+.slider-wrap { margin-top: 22px; }
+.slider { -webkit-appearance: none; appearance: none; width: 100%; height: 9px; border-radius: 999px; background: linear-gradient(90deg, var(--acc1) 0%, var(--acc2) var(--fill, 16.6%), var(--track) var(--fill, 16.6%), var(--track) 100%); box-shadow: inset 0 1px 2px rgba(40, 38, 60, 0.22); outline: none; cursor: pointer; }
+.slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; border-radius: 50%; background: var(--acc-solid); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(40, 38, 60, 0.32); cursor: grab; }
+.slider::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--acc-solid); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(40, 38, 60, 0.32); cursor: grab; }
+.slider:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.08); }
+.slider:active::-moz-range-thumb { cursor: grabbing; }
+.slider:disabled { opacity: 0.55; cursor: default; }
+.slider-labels { display: flex; justify-content: space-between; margin-top: 13px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 
-.app {
-  padding: 24px 22px 20px;
-}
+/* #statusHint — info panel, plus .warn amber "out of my hands" variant */
+.status-hint { margin: 13px 0 0; padding: 10px 12px; font-size: 12px; font-weight: 500; line-height: 1.4; color: var(--acc-ink); background: var(--tint); border-radius: 12px; }
+.status-hint.warn { color: #9a4b00; background: rgba(249, 168, 37, 0.16); }
 
-/* --- Top bar ----------------------------------------------------------- */
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-.logo {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
-  color: #fff;
-  background: linear-gradient(135deg, var(--acc1), var(--acc2));
-  box-shadow: 0 6px 16px rgba(109, 92, 255, 0.32);
-  flex: 0 0 auto;
-}
-.logo svg {
-  width: 23px;
-  height: 23px;
-}
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-.brand-name {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-}
-.brand-tag {
-  font-size: 11.5px;
-  color: var(--muted);
-}
+/* .presets — Flat / Voice / Bass buttons, with hover/active/disabled/selected states */
+.presets { display: flex; gap: 9px; margin-top: 16px; }
+.preset { flex: 1; display: inline-flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; font-size: 12px; font-weight: 600; color: var(--ink); background: linear-gradient(#ffffff, #f8f9fc); border: 1px solid var(--btn-border); border-radius: 14px; box-shadow: var(--shadow-btn); cursor: pointer; transition: transform 0.08s ease, box-shadow 0.12s ease, border-color 0.12s ease; }
+.preset svg { width: 18px; height: 18px; color: var(--muted); }
+.preset:hover:not(:disabled):not(.active) { transform: translateY(-1px); border-color: #c6cad8; box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14); }
+.preset:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 2px rgba(40, 38, 60, 0.12); }
+.preset:disabled { opacity: 0.5; cursor: default; }
+.preset.active { color: #fff; background: linear-gradient(135deg, var(--acc1), var(--acc2)); border-color: transparent; box-shadow: 0 6px 16px rgba(109, 92, 255, 0.32); }
+.preset.active svg { color: #fff; }
 
-/* --- Hero: circular gauge + slider ------------------------------------ */
-.hero {
-  margin-top: 22px;
-  padding: 26px 24px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  box-shadow: var(--shadow-card);
-}
+/* #reset button — full-width, with hover/active/disabled states */
+.reset { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin-top: 11px; padding: 12px; font-size: 12.5px; font-weight: 600; color: var(--ink); background: linear-gradient(#ffffff, #f8f9fc); border: 1px solid var(--btn-border); border-radius: 13px; box-shadow: var(--shadow-btn); cursor: pointer; transition: transform 0.08s ease, border-color 0.12s ease, box-shadow 0.12s ease; }
+.reset svg { width: 15px; height: 15px; color: var(--muted); }
+.reset:hover:not(:disabled) { border-color: var(--acc-solid); color: var(--acc-ink); box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14); }
+.reset:hover:not(:disabled) svg { color: var(--acc-ink); }
+.reset:active:not(:disabled) { transform: translateY(1px); }
+.reset:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
 
-.dial {
-  width: 158px;
-  height: 158px;
-  margin: 0 auto 4px;
-  border-radius: 50%;
-  background: conic-gradient(
-    var(--acc1) 0,
-    var(--acc2) var(--fill),
-    var(--ring-track) var(--fill)
-  );
-  display: grid;
-  place-items: center;
-  transition: background 0.12s linear;
-}
-.dial-inner {
-  width: 128px;
-  height: 128px;
-  border-radius: 50%;
-  background: var(--panel);
-  box-shadow: 0 2px 10px rgba(60, 55, 80, 0.06);
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 2px;
-}
-.dial-value {
-  font-size: 37px;
-  font-weight: 800;
-  letter-spacing: -1.5px;
-  line-height: 1;
-  /* Deeper violet→teal than the brand --acc1/--acc2: the bright cyan tail was
-     nearly invisible on the white dial, so the "%" and right-hand digits washed
-     out. These darker stops keep the gradient identity but stay legible. */
-  background: linear-gradient(120deg, #5b46f0 0%, #0f97b8 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.dial-label {
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  color: var(--muted);
-}
+/* <section class="tabs"> — "Now playing" label + single now-playing row */
+.tabs { margin-top: 20px; }
+.section-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); margin-bottom: 9px; }
+.tabs-list { list-style: none; margin: 0; padding: 0; }
+.tab-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border-radius: 12px; font-size: 12.5px; color: var(--ink); background: var(--tint); }
+.tab-item img { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
+.tab-item .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- Slider ------------------------------------------------------------ */
-.slider-wrap {
-  margin-top: 22px;
-}
-.slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 9px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    var(--acc1) 0%,
-    var(--acc2) var(--fill, 16.6%),
-    var(--track) var(--fill, 16.6%),
-    var(--track) 100%
-  );
-  box-shadow: inset 0 1px 2px rgba(40, 38, 60, 0.22);
-  outline: none;
-  cursor: pointer;
-}
-.slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--acc-solid);
-  border: 3px solid #fff;
-  box-shadow: 0 2px 6px rgba(40, 38, 60, 0.32);
-  cursor: grab;
-}
-.slider::-moz-range-thumb {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--acc-solid);
-  border: 3px solid #fff;
-  box-shadow: 0 2px 6px rgba(40, 38, 60, 0.32);
-  cursor: grab;
-}
-.slider:active::-webkit-slider-thumb {
-  cursor: grabbing;
-  transform: scale(1.08);
-}
-.slider:active::-moz-range-thumb {
-  cursor: grabbing;
-}
-.slider:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-.slider-labels {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 13px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--muted);
-}
+/* <section class="rate"> — star rating buttons + feedback panel */
+.rate { display: flex; flex-direction: column; align-items: center; gap: 5px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+.rate-label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.stars { display: inline-flex; justify-content: center; gap: 3px; }
+.star { border: none; background: none; padding: 2px; margin: 0; line-height: 0; border-radius: 6px; cursor: pointer; }
+.star svg { display: block; width: 26px; height: 26px; fill: #b4b9c6; transition: fill 0.1s ease, transform 0.1s ease; }
+.star.filled svg { fill: #ffb400; }
+.star:hover svg { transform: scale(1.08); }
+.star:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--tint); }
+.rate-hint { font-size: 11px; color: var(--muted); }
+.rate-feedback { margin: 6px 2px 0; padding: 12px 14px; font-size: 13.5px; line-height: 1.55; text-align: center; color: var(--ink); background: var(--panel-2); border: 1px solid var(--border); border-radius: 11px; }
+.rate-feedback a { color: var(--acc-ink); font-weight: 600; text-decoration: none; }
+.rate-feedback a:hover { text-decoration: underline; }
 
-/* --- Preset buttons ---------------------------------------------------- */
-.presets {
-  display: flex;
-  gap: 9px;
-  margin-top: 16px;
-}
-.preset {
-  flex: 1;
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 12px 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
-  background: linear-gradient(#ffffff, #f8f9fc);
-  border: 1px solid var(--btn-border);
-  border-radius: 14px;
-  box-shadow: var(--shadow-btn);
-  cursor: pointer;
-  transition: transform 0.08s ease, box-shadow 0.12s ease, border-color 0.12s ease;
-}
-.preset svg {
-  width: 18px;
-  height: 18px;
-  color: var(--muted);
-}
-.preset:hover:not(:disabled):not(.active) {
-  transform: translateY(-1px);
-  border-color: #c6cad8;
-  box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14);
-}
-.preset:active:not(:disabled) {
-  transform: translateY(1px);
-  box-shadow: 0 1px 2px rgba(40, 38, 60, 0.12);
-}
-.preset:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.preset.active {
-  color: #fff;
-  background: linear-gradient(135deg, var(--acc1), var(--acc2));
-  border-color: transparent;
-  box-shadow: 0 6px 16px rgba(109, 92, 255, 0.32);
-}
-.preset.active svg {
-  color: #fff;
-}
+/* <footer class="footer"> — dot + contact line */
+.footer { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); text-align: center; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: linear-gradient(135deg, var(--acc1), var(--acc2)); flex: 0 0 auto; }
+.footer a { color: var(--acc-ink); font-weight: 600; text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
 
-/* --- Reset button ------------------------------------------------------ */
-.reset {
-  width: 100%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  margin-top: 11px;
-  padding: 12px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink);
-  background: linear-gradient(#ffffff, #f8f9fc);
-  border: 1px solid var(--btn-border);
-  border-radius: 13px;
-  box-shadow: var(--shadow-btn);
-  cursor: pointer;
-  transition: transform 0.08s ease, border-color 0.12s ease, box-shadow 0.12s ease;
-}
-.reset svg {
-  width: 15px;
-  height: 15px;
-  color: var(--muted);
-}
-.reset:hover:not(:disabled) {
-  border-color: var(--acc-solid);
-  color: var(--acc-ink);
-  box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14);
-}
-.reset:hover:not(:disabled) svg {
-  color: var(--acc-ink);
-}
-.reset:active:not(:disabled) {
-  transform: translateY(1px);
-}
-.reset:disabled {
-  opacity: 0.5;
-  cursor: default;
-  box-shadow: none;
-}
-
-/* --- Status hint ------------------------------------------------------- */
-.status-hint {
-  margin: 13px 0 0;
-  padding: 10px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
-  color: var(--acc-ink); /* deep violet — reads clearly on the light --tint panel */
-  background: var(--tint);
-  border-radius: 12px;
-}
-/* Orange "out of my hands" warning: DRM streams (Netflix, Disney+…), embedded
-   cross-origin players, and other audio this add-on physically can't reach.
-   Deep amber text (~6.5:1) on a soft amber panel. */
-.status-hint.warn {
-  color: #9a4b00;
-  background: rgba(249, 168, 37, 0.16);
-}
-
-/* --- Now-playing row --------------------------------------------------- */
-/* A single, non-interactive row for the current tab while it's making sound;
-   hidden entirely when the tab is silent (popup.js toggles [hidden]). */
-.tabs {
-  margin-top: 20px;
-}
-.section-label {
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1.4px;
-  color: var(--muted);
-  margin-bottom: 9px;
-}
-.tabs-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.tab-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 12px;
-  font-size: 12.5px;
-  color: var(--ink);
-  background: var(--tint);
-}
-.tab-item img {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  border-radius: 3px;
-}
-.tab-item .tab-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* --- Rate this extension ----------------------------------------------- */
-.rate {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border); /* divider above "Enjoying Crescendo?" */
-}
-.rate-label {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.stars {
-  display: inline-flex;
-  justify-content: center;
-  gap: 3px;
-}
-/* Each star is its own button now: 1–2 opens a "contact us first" note, 3–5
-   goes to the store. So the fill IS meaningful — popup.js lights up stars 1..N
-   (the .filled class) on hover/focus/selection to preview the score. */
-.star {
-  border: none;
-  background: none;
-  padding: 2px;
-  margin: 0;
-  line-height: 0;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.star svg {
-  display: block;
-  width: 26px;
-  height: 26px;
-  fill: #b4b9c6; /* visible placeholder grey (was --track #e4e6ee — near-invisible on white) */
-  transition: fill 0.1s ease, transform 0.1s ease;
-}
-.star.filled svg {
-  fill: #ffb400;
-}
-.star:hover svg {
-  transform: scale(1.08);
-}
-.star:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--tint);
-}
-.rate-hint {
-  font-size: 11px;
-  color: var(--muted);
-}
-.rate-feedback {
-  margin: 6px 2px 0;
-  padding: 9px 12px;
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: center;
-  color: var(--ink);
-  background: var(--panel-2);
-  border-radius: 11px;
-}
-.rate-feedback a {
-  color: var(--acc-ink);
-  font-weight: 600;
-  text-decoration: none;
-}
-.rate-feedback a:hover {
-  text-decoration: underline;
-}
-
-/* --- First-run coach marks --------------------------------------------- */
-/* Dim the popup, lift the control being pointed at above the dim, and float a
-   tip with an arrow at it. Click anywhere to advance (popup.js drives it). */
-.coach {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: rgba(20, 18, 34, 0.6);
-  cursor: pointer;
-}
-.coach-target {
-  position: relative;
-  z-index: 51;
-  border-radius: 14px;
-  box-shadow: 0 0 0 3px #fff, 0 0 0 7px var(--acc-solid);
-}
-.coach-tip {
-  position: absolute;
-  z-index: 52;
-  left: 22px;
-  right: 22px;
-  padding: 14px 16px;
-  background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 14px 36px rgba(20, 18, 34, 0.45);
-}
-/* Arrow: a white triangle whose left edge popup.js aims at the target's centre. */
-.coach-tip::before {
-  content: "";
-  position: absolute;
-  left: var(--arrow, 50%);
-  transform: translateX(-50%);
-  border: 9px solid transparent;
-}
-.coach-tip.below::before {
-  bottom: 100%;
-  border-bottom-color: #fff;
-}
-.coach-tip.above::before {
-  top: 100%;
-  border-top-color: #fff;
-}
-.coach-text {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.5;
-  color: #1a1c26; /* near-black on white — high contrast, easy to read */
-}
-.coach-hint {
-  display: block;
-  margin-top: 9px;
-  font-size: 13.5px;
-  font-weight: 700;
-  color: var(--acc-ink);
-}
-
-/* --- Footer ------------------------------------------------------------ */
-.footer {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  margin-top: 20px;
-  padding-top: 15px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--muted);
-  text-align: center;
-}
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--acc1), var(--acc2));
-  flex: 0 0 auto;
-}
-.footer a {
-  color: var(--acc-ink);
-  font-weight: 600;
-  text-decoration: none;
-}
-.footer a:hover {
-  text-decoration: underline;
-}
+/* #coach — first-run coach marks: dim overlay, highlighted target, arrow tip */
+.coach { position: fixed; inset: 0; z-index: 50; background: rgba(20, 18, 34, 0.6); cursor: pointer; }
+.coach-target { position: relative; z-index: 51; border-radius: 14px; box-shadow: 0 0 0 3px #fff, 0 0 0 7px var(--acc-solid); }
+.coach-tip { position: absolute; z-index: 52; left: 22px; right: 22px; padding: 14px 16px; background: #fff; border-radius: 14px; box-shadow: 0 14px 36px rgba(20, 18, 34, 0.45); }
+.coach-tip::before { content: ""; position: absolute; left: var(--arrow, 50%); transform: translateX(-50%); border: 9px solid transparent; }
+.coach-tip.below::before { bottom: 100%; border-bottom-color: #fff; }
+.coach-tip.above::before { top: 100%; border-top-color: #fff; }
+.coach-text { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.5; color: #1a1c26; }
+.coach-hint { display: block; margin-top: 9px; font-size: 13.5px; font-weight: 700; color: var(--acc-ink); }

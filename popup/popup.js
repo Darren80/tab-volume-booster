@@ -288,29 +288,29 @@ async function init() {
 // and there's no sub-100 % region left that would need finer control.
 const STEP = 10;
 
-function clampVol(v) {
-  return Math.min(MAX, Math.max(MIN, v));
+function clampVolume(value) {
+  return Math.min(MAX, Math.max(MIN, value));
 }
 
 // Snap a raw value to the nearest 10 %. Used while dragging.
-function snapVol(v) {
-  return clampVol(Math.round(v / STEP) * STEP);
+function snapVolume(value) {
+  return clampVolume(Math.round(value / STEP) * STEP);
 }
 
 // Move one 10 % stop up or down. Used for keyboard nudges.
-function stepVol(from, dir) {
-  return clampVol(from + (dir > 0 ? STEP : -STEP));
+function stepVolume(from, direction) {
+  return clampVolume(from + (direction > 0 ? STEP : -STEP));
 }
 
 // One place to apply a new volume: reflect it in the UI and tell the tab.
 async function commitVolume(percent) {
-  const v = clampVol(percent);
-  renderVolume(v);
-  renderHint(await broadcast({ type: "set-volume", value: v }));
+  const clamped = clampVolume(percent);
+  renderVolume(clamped);
+  renderHint(await broadcast({ type: "set-volume", value: clamped }));
 }
 
 slider.addEventListener("input", () => {
-  commitVolume(snapVol(Number(slider.value)));
+  commitVolume(snapVolume(Number(slider.value)));
 });
 
 // Own the arrow / page / home-end keys so their steps follow the same grid the
@@ -321,17 +321,17 @@ slider.addEventListener("keydown", (event) => {
   switch (event.key) {
     case "ArrowUp":
     case "ArrowRight":
-      next = stepVol(current, +1);
+      next = stepVolume(current, +1);
       break;
     case "ArrowDown":
     case "ArrowLeft":
-      next = stepVol(current, -1);
+      next = stepVolume(current, -1);
       break;
     case "PageUp":
-      next = snapVol(current + 50);
+      next = snapVolume(current + 50);
       break;
     case "PageDown":
-      next = snapVol(current - 50);
+      next = snapVolume(current - 50);
       break;
     case "Home":
       next = MIN;
@@ -349,7 +349,7 @@ slider.addEventListener("keydown", (event) => {
 // Slider hover behaviour (wheel + cursor + click-to-move over a small margin
 // around the thin track) lives in slider-hover.js. Wire it up with the helpers
 // it needs; it adds no styling of its own.
-initSliderHover({ slider, snapVol, stepVol, commitVolume });
+initSliderHover({ slider, snapVolume, stepVolume, commitVolume });
 
 presetButtons.forEach((button) => {
   button.addEventListener("click", async () => {
@@ -388,6 +388,8 @@ function rate(value) {
     paintStars(value); // leave the chosen stars lit as acknowledgement
     rateHint.hidden = true;
     rateFeedback.hidden = false; // show the "contact us first" note; stay in the popup
+    // The note appears at the very bottom, so scroll the page down to it.
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   } else {
     api.tabs.create({ url: REVIEW_URL });
     window.close();
