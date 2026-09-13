@@ -408,7 +408,7 @@ const coach = document.getElementById("coach");
 const coachTip = document.getElementById("coachTip");
 const coachText = document.getElementById("coachText");
 const COACH_STEPS = [
-  { el: document.querySelector(".slider-wrap"), text: "Drag the slider to boost this tab — up to 1200%." },
+  { el: document.querySelector(".slider-wrap"), text: "Drag this slider to boost audio!" },
   { el: document.querySelector(".presets"), text: "Click a preset to boost a voice or increase bass." },
 ];
 let coachStep = -1;

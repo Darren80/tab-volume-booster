@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
   <!-- No background: the tile is transparent. -->
   <!-- Speaker cone: white fill with a thin dark outline so it stays visible on
-       both light and dark toolbars. Sized to fill the canvas so it doesn't
-       render smaller than neighbouring toolbar icons. -->
-  <path d="M12 36 H30 L54 14 V82 L30 60 H12 Z" fill="#ffffff"
-        stroke="#0f172a" stroke-width="4.5" stroke-linejoin="round"/>
+       both light and dark toolbars. Sized to fill the canvas edge to edge so it
+       doesn't render smaller than neighbouring toolbar icons. -->
+  <path d="M5 39 H27 L53 5 V91 L27 57 H5 Z" fill="#ffffff"
+        stroke="#0f172a" stroke-width="5" stroke-linejoin="round"/>
   <!-- Two sound waves, green, growing outward. -->
-  <g fill="none" stroke="#22c55e" stroke-width="8" stroke-linecap="round">
-    <path d="M64 34 Q74 48 64 62"/>
-    <path d="M76 22 Q92 48 76 74"/>
+  <g fill="none" stroke="#22c55e" stroke-width="9" stroke-linecap="round">
+    <path d="M61 34 Q73 48 61 62"/>
+    <path d="M75 14 Q97 48 75 82"/>
   </g>
 </svg>
