@@ -100,7 +100,7 @@ function renderHint(state) {
     // Media loaded from another site without CORS: unroutable.
     warn = true;
     message =
-      "Some audio here comes from another site I'm not allowed to touch — boosting it MAY not work.";
+      "Some audio here comes from another site — boosting it MAY not work.";
   } else if (state.engaged && !state.hasMedia) {
     message = "No audio or video found on this page yet.";
   }

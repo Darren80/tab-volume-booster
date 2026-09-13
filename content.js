@@ -1,6 +1,6 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> bassFilter (lowshelf) -> voiceFilter (peaking) -> trebleFilter (highshelf) -> [ soft clipper | masterGain ] -> destination
+//   source -> bassFilter (lowshelf) -> voiceFilter (peaking) -> deHarshFilter (peaking) -> trebleFilter (highshelf) -> deSibFilter (peaking) -> [ soft clipper | masterGain ] -> destination
 //   (the last stage is a soft clipper that bakes in the volume boost; toggle it off to fall back to a plain gain node)
 //
 // Two hard-won rules (both verified by testing in real Firefox):
@@ -58,23 +58,44 @@
       q: 1.1, // bell width — a touch focused so the lift reads as "presence", not just louder.
       //         Higher = narrower/more surgical, lower = broader.
     },
+    deHarshBand: {
+      type: "peaking", // a narrow bell used ONLY to CUT (Voice preset)
+      frequencyHz: 4300, // the "harsh edge": the upper shoulder of the presence boost spills
+      //                    up to here, sitting just under the treble shelf where nothing else
+      //                    cuts it. Once the sibilance notch (below) removes the top "sss",
+      //                    this becomes the most prominent harshness — so the Voice preset
+      //                    dips it. Measured as the loudest sibilant-region band on real speech.
+      q: 1.8, // fairly focused so it thins the harshness without dulling nearby consonants.
+    },
     trebleBand: {
       type: "highshelf", // lifts/cuts EVERYTHING above `frequencyHz`
       frequencyHz: 6500, // above the consonant band (s/t/f/sh live at 4–6 kHz), so the
       //                    Voice preset's cut kills hiss and noise without dulling clarity.
       //                    Was 4 kHz, which softened consonants.
     },
+    deSibBand: {
+      type: "peaking", // a narrow bell used ONLY to CUT (Voice preset)
+      frequencyHz: 7500, // the "sss" sibilance peak. It poked back UP above the treble shelf
+      //                    (the shelf's roll-off is gradual), so the Voice preset drops a
+      //                    focused notch right on it. Static, not dynamic (no de-esser): it
+      //                    trims the sibilant band evenly and stays out of the consonants.
+      q: 2.5, // narrow, so it removes the "sss" without touching the surrounding clarity.
+    },
 
-    // ---- Presets: each sets the three bands' gain in DECIBELS. 0 dB = flat. --
-    //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half.
+    // ---- Presets: each sets the five bands' gain in DECIBELS. 0 dB = flat. ---
+    //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half. The two
+    //  de-harshing bands (deHarsh 4.3k, deSib 7.5k) are Voice-only tamers: they
+    //  cut the two sibilant hotspots the presence boost exposes, and sit at 0 dB
+    //  (inaudible) for Flat and Bass.
     presets: {
-      default: { bassGainDb: 0, voiceGainDb: 0, trebleGainDb: 0 }, // flat — no colouring
-      bass: { bassGainDb: 14, voiceGainDb: 0, trebleGainDb: 0 }, // boomy, weighty low end
-      voice: { bassGainDb: -12, voiceGainDb: 6, trebleGainDb: -9 }, // voice isolation:
-      //         kill lows, boost presence, kill highs. Consonants (4–6 kHz) survive
-      //         because the treble shelf sits at 6.5 kHz. Presence lift kept to +6 dB:
-      //         at +11 it landed on top of the voice's natural 2–2.7 kHz peak and
-      //         pierced on upward inflections. +6 adds clarity without the ice-pick.
+      default: { bassGainDb: 0, voiceGainDb: 0, deHarshGainDb: 0, trebleGainDb: 0, deSibGainDb: 0 }, // flat
+      bass: { bassGainDb: 14, voiceGainDb: 0, deHarshGainDb: 0, trebleGainDb: 0, deSibGainDb: 0 }, // boomy
+      voice: { bassGainDb: -5, voiceGainDb: 6, deHarshGainDb: -3, trebleGainDb: -9, deSibGainDb: -6 },
+      //         voice clarity: trim (not gut) the lows so the voice keeps its body,
+      //         boost presence, kill highs (consonants survive because the treble shelf
+      //         sits at 6.5 kHz), then dip the two sibilant hotspots the +6 presence
+      //         boost exposes — 4.3 kHz harsh edge and 7.5 kHz "sss". The low cut is
+      //         only -5 dB: at -12 it band-limited the voice to a thin "telephone" sound.
     },
 
     // ---- The soft clipper: the anti-clipping stage at the end of the chain. --
@@ -106,7 +127,9 @@
   let masterGain = null;
   let bassFilter = null;
   let voiceFilter = null;
+  let deHarshFilter = null; // Voice-only cut at 4.3 kHz (harsh edge)
   let trebleFilter = null;
+  let deSibFilter = null; // Voice-only cut at 7.5 kHz (sibilance)
   let shaper = null; // WaveShaper doing the soft clipping (with the boost baked into its curve)
   let clipEnabled = SETTINGS.softClip.enabled; // live bypass flag; toggle with setSoftClipEnabled()
   let observer = null;
@@ -162,19 +185,31 @@
     voiceFilter.Q.value = SETTINGS.voiceBand.q;
     voiceFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
+    deHarshFilter = audioContext.createBiquadFilter();
+    deHarshFilter.type = SETTINGS.deHarshBand.type;
+    deHarshFilter.frequency.value = SETTINGS.deHarshBand.frequencyHz;
+    deHarshFilter.Q.value = SETTINGS.deHarshBand.q;
+    deHarshFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
+
     trebleFilter = audioContext.createBiquadFilter();
     trebleFilter.type = SETTINGS.trebleBand.type;
     trebleFilter.frequency.value = SETTINGS.trebleBand.frequencyHz;
     trebleFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
-    // Two possible tails, both wired to the speakers; the treble filter feeds
-    // exactly one of them (see routeClip), so toggling soft-clip is instant.
+    deSibFilter = audioContext.createBiquadFilter();
+    deSibFilter.type = SETTINGS.deSibBand.type;
+    deSibFilter.frequency.value = SETTINGS.deSibBand.frequencyHz;
+    deSibFilter.Q.value = SETTINGS.deSibBand.q;
+    deSibFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
+
+    // Two possible tails, both wired to the speakers; the LAST EQ node (deSibFilter)
+    // feeds exactly one of them (see routeClip), so toggling soft-clip is instant.
     //
-    //  ON  : trebleFilter -> shaper -> destination
+    //  ON  : deSibFilter -> shaper -> destination
     //        The shaper's curve applies the boost AND rounds off the peaks. (The
     //        boost lives in the curve because a WaveShaper clamps its input to ±1,
     //        so a gain node in front of it would just hard-clip.)
-    //  OFF : trebleFilter -> masterGain -> destination
+    //  OFF : deSibFilter -> masterGain -> destination
     //        A plain gain node — the raw, boosted, freely-clippable signal (A/B).
     masterGain = audioContext.createGain();
     masterGain.gain.value = currentVolume;
@@ -183,11 +218,16 @@
     shaper.oversample = SETTINGS.softClip.oversample;
     updateShaperCurve(); // bakes the current volume + the soft-clip shape into the curve
 
+    // EQ chain (frequency order): bass -> voice -> deHarsh -> treble -> deSib -> tail.
+    // Biquads in series are commutative in magnitude, so the ordering is just for
+    // readability; deSibFilter is the last stage and feeds the tail via routeClip.
     bassFilter.connect(voiceFilter);
-    voiceFilter.connect(trebleFilter);
+    voiceFilter.connect(deHarshFilter);
+    deHarshFilter.connect(trebleFilter);
+    trebleFilter.connect(deSibFilter);
     masterGain.connect(audioContext.destination); // OFF tail — always wired, fed only when bypassed
     shaper.connect(audioContext.destination); //     ON  tail — always wired, fed only when engaged
-    routeClip(); // point trebleFilter at whichever tail is active
+    routeClip(); // point deSibFilter at whichever tail is active
 
     applyPresetNodes();
 
@@ -231,17 +271,17 @@
     shaper.curve = curve;
   }
 
-  // Point the treble filter at whichever tail is active: the shaper (soft-clip on)
-  // or the plain masterGain (off). Both tails stay wired to the speakers, so this
-  // is just re-pointing one connection — no rebuild, safe to flip live.
+  // Point the last EQ node (deSibFilter) at whichever tail is active: the shaper
+  // (soft-clip on) or the plain masterGain (off). Both tails stay wired to the
+  // speakers, so this is just re-pointing one connection — safe to flip live.
   function routeClip() {
-    if (!trebleFilter || !masterGain || !shaper) return;
+    if (!deSibFilter || !masterGain || !shaper) return;
     try {
-      trebleFilter.disconnect();
+      deSibFilter.disconnect();
     } catch (err) {
       /* nothing connected yet */
     }
-    trebleFilter.connect(clipEnabled ? shaper : masterGain);
+    deSibFilter.connect(clipEnabled ? shaper : masterGain);
   }
 
   // Programmatic on/off for the soft clipper — handy for A/B testing. Call
@@ -331,7 +371,9 @@
     const preset = SETTINGS.presets[currentPreset] || SETTINGS.presets.default;
     bassFilter.gain.value = preset.bassGainDb;
     voiceFilter.gain.value = preset.voiceGainDb;
+    deHarshFilter.gain.value = preset.deHarshGainDb;
     trebleFilter.gain.value = preset.trebleGainDb;
+    deSibFilter.gain.value = preset.deSibGainDb;
   }
 
   // Bring the graph up, hook gestures, and take over if we already can. Never
