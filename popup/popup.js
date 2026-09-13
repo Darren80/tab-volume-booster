@@ -346,6 +346,66 @@ slider.addEventListener("keydown", (event) => {
   commitVolume(next);
 });
 
+// The slider track is thin, so we treat a few pixels around it as part of the
+// control: the wheel, the cursor, and clicks all respond within this margin.
+const SLIDER_PAD = 12; // px of slack around the slider's box
+const sliderZone = document.querySelector(".slider-wrap") || slider;
+
+// Is the pointer over the slider, or within SLIDER_PAD of its box?
+function nearSlider(event) {
+  if (slider.disabled) return false;
+  const r = slider.getBoundingClientRect();
+  return (
+    event.clientX >= r.left - SLIDER_PAD &&
+    event.clientX <= r.right + SLIDER_PAD &&
+    event.clientY >= r.top - SLIDER_PAD &&
+    event.clientY <= r.bottom + SLIDER_PAD
+  );
+}
+
+// Map a pointer X within the (padded) track to a snapped volume.
+function volFromX(clientX) {
+  const r = slider.getBoundingClientRect();
+  const frac = (clientX - r.left) / r.width;
+  return snapVol(MIN + Math.min(1, Math.max(0, frac)) * (MAX - MIN));
+}
+
+// Scroll wheel nudges one 10 % stop per notch. Scrolling up (negative deltaY)
+// raises the volume, matching the slider labels.
+sliderZone.addEventListener(
+  "wheel",
+  (event) => {
+    if (!nearSlider(event)) return;
+    event.preventDefault(); // don't scroll the popup while adjusting
+    const dir = event.deltaY < 0 ? +1 : -1;
+    commitVolume(stepVol(Number(slider.value), dir));
+  },
+  { passive: false },
+);
+
+// Show the slider cursor throughout the margin, not just on the thin track.
+sliderZone.addEventListener("pointermove", (event) => {
+  sliderZone.style.cursor = nearSlider(event) ? "pointer" : "";
+});
+sliderZone.addEventListener("pointerleave", () => {
+  sliderZone.style.cursor = "";
+});
+
+// Clicking in the margin jumps the slider to that spot; holding lets you drag.
+sliderZone.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || event.target === slider || !nearSlider(event)) return;
+  event.preventDefault();
+  sliderZone.setPointerCapture(event.pointerId);
+  commitVolume(volFromX(event.clientX));
+  const onMove = (e) => commitVolume(volFromX(e.clientX));
+  const onUp = () => {
+    sliderZone.removeEventListener("pointermove", onMove);
+    sliderZone.removeEventListener("pointerup", onUp);
+  };
+  sliderZone.addEventListener("pointermove", onMove);
+  sliderZone.addEventListener("pointerup", onUp);
+});
+
 presetButtons.forEach((button) => {
   button.addEventListener("click", async () => {
     const name = button.dataset.preset;
