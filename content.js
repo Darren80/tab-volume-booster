@@ -136,7 +136,7 @@
     softClip: {
       enabled: true, // on by default. Flip off to A/B against raw (clippable) gain —
       //                live-toggle with setSoftClipEnabled() / the "set-softclip" message.
-      kneeStartDb: -1, // the boost passes through as CLEAN, LINEAR gain below this; only in the
+      kneeStartDb: -0.5, // the boost passes through as CLEAN, LINEAR gain below this; only in the
       //                 last ~0.6 dB up to the ceiling do peaks ease into the limit. Kept high
       //                 on purpose: a low knee (the old -3) saturates most of the signal and
       //                 sounds distorted, because the boost is baked into the curve so "-3 dBFS

@@ -33,6 +33,8 @@ const api = typeof browser !== "undefined" ? browser : chrome;
 const DEFAULT_PERCENT = 100; // at exactly this we clear the badge (normal volume)
 const BADGE_BG = "#16a34a"; // green tile behind the number, to match the icon's waves
 const BADGE_FG = "#ffffff"; // white number for contrast
+const DEFAULT_TITLE = "Crescendo — Tab Volume Booster"; // hover label at normal volume
+const PERCENT_TITLE = "Crescendo — "; // hover label when boosted
 
 const keyFor = (tabId) => `tab-${tabId}`;
 
@@ -53,6 +55,13 @@ function badgeText(percent) {
   return (Number.isInteger(mult) ? String(mult) : mult.toFixed(1)) + "x";
 }
 
+// The icon's hover label. At normal volume it's just the plain name; when a tab
+// is boosted we append its strongest boost so the percentage shows on mouse-over.
+function titleText(percent) {
+  if (percent === DEFAULT_PERCENT) return DEFAULT_TITLE;
+  return `${PERCENT_TITLE}${percent}% boost`;
+}
+
 // Paint the badge for a tab from the strongest boost across its frames. Each call
 // is wrapped: a tab can vanish (closed/navigated) between a report and here, which
 // rejects the promise — harmless, so swallow it.
@@ -65,6 +74,7 @@ function refreshBadge(tabId) {
   api.action.setBadgeBackgroundColor({ tabId, color: BADGE_BG }).catch(() => {});
   // setBadgeTextColor isn't in every build; ignore if unavailable.
   api.action.setBadgeTextColor?.({ tabId, color: BADGE_FG }).catch(() => {});
+  api.action.setTitle({ tabId, title: titleText(peak) }).catch(() => {});
 }
 
 function recordFrameVolume(tabId, frameId, percent) {
@@ -113,6 +123,7 @@ api.webNavigation?.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return; // only the main frame resets the whole tab
   tabFrames.delete(details.tabId);
   api.action.setBadgeText({ tabId: details.tabId, text: "" }).catch(() => {});
+  api.action.setTitle({ tabId: details.tabId, title: DEFAULT_TITLE }).catch(() => {});
 });
 
 // Tidy up a tab's saved state when it closes (session storage would clear it on
