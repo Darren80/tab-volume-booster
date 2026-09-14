@@ -1,6 +1,6 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> mudFilter (peaking) -> presenceFilter (peaking) -> tameFilter (highshelf) -> [ soft clipper | masterGain | leveler->makeup->limiter ] -> destination
+//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> mudFilter (peaking) -> presenceFilter (peaking) -> voiceBoostFilter (peaking) -> tameFilter (highshelf) -> [ soft clipper | masterGain | leveler->makeup->limiter ] -> destination
 // The last stage is one of three swappable tails (see activeTail): the soft clipper
 // (default), a plain gain node (raw/transparent), or the "Stable Volume" chain (A/B, off by default).
 //
@@ -74,14 +74,29 @@
       frequencyHz: 7500, // on the sibilant shoulder, above the consonants (s/t/f/sh at 4-6 kHz),
       //                    so it smooths "sss" without dulling clarity.
     },
+    // 6. Voice-boost bell (the Voice preset): a straight copy of Volume Master's voice boost —
+    //    ONE broad peaking bell that lifts (not cuts) the vocal midrange.
+    //    Reverse-engineered from Volume Master v1.14.x (offscreen.js): peaking @ 1500 Hz,
+    //    Q 1, +12 dB. (Their store copy says "2.5 kHz + a compressor"; the shipped code is
+    //    a single 1500 Hz bell with no compressor.) This replaced our old clarity-cut Voice
+    //    recipe, which is kept as a comment under the `voice` preset below.
+    voiceBoostBand: {
+      type: "peaking", // a bell centred on `frequencyHz`
+      frequencyHz: 1500, // Volume Master's actual voice-boost centre (broad vocal midrange)
+      q: 1.0, // Volume Master's Q — broad, so it reads as "fuller/louder voice", not a honk
+    },
 
     // ---- Presets: each sets the bands' gain in DECIBELS. 0 dB = flat. --------
     //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half. The low-cut
     //  has no gain knob (see routeLowCut), so it isn't listed here.
     presets: {
-      default: { bassGainDb: 0, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0 }, // flat
-      bass: { bassGainDb: 14, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0 }, // boomy
-      voice: { bassGainDb: -1, mudGainDb: -3, presenceGainDb: 3, tameGainDb: -3 },
+      default: { bassGainDb: 0, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0, voiceBoostGainDb: 0 }, // flat
+      bass: { bassGainDb: 14, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0, voiceBoostGainDb: 0 }, // boomy
+      voice: { bassGainDb: 0, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0, voiceBoostGainDb: 12 },
+      //        Volume Master's voice boost, copied 1:1: a single +12 dB bell at 1500 Hz and nothing
+      //        else — a BOOST (louder/fuller), riding through the soft clipper so it won't harsh-clip.
+      //  OLD clarity recipe (replaced — kept for reference; to restore, swap the `voice` line for this):
+      //      voice: { bassGainDb: -1, mudGainDb: -3, presenceGainDb: 3, tameGainDb: -3, voiceBoostGainDb: 0 },
       //        clarity recipe: mud cut to un-muffle, a small presence lift (never pierces),
       //        a soft top-shelf to smooth sibilance — the 80 Hz high-pass handles the rumble.
     },
@@ -137,6 +152,7 @@
   let mudFilter = null; // Voice-only cut at 350 Hz (un-muffle)
   let presenceFilter = null; // Voice-only lift at 3 kHz (clarity/forwardness)
   let tameFilter = null; // Voice-only high-shelf roll-off at 7.5 kHz (smooth the top)
+  let voiceBoostFilter = null; // Voice-only +12 dB bell at 1.5 kHz (Volume Master's voice boost)
   let shaper = null; // WaveShaper doing the soft clipping (with the boost baked into its curve)
   let clipEnabled = SETTINGS.softClip.enabled; // live bypass flag; toggle with setSoftClipEnabled()
   // "Stable Volume" tail (A/B alternative to the shaper): leveler -> makeup -> limiter.
@@ -205,6 +221,12 @@
     tameFilter.frequency.value = SETTINGS.tameBand.frequencyHz;
     tameFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
 
+    voiceBoostFilter = audioContext.createBiquadFilter();
+    voiceBoostFilter.type = SETTINGS.voiceBoostBand.type;
+    voiceBoostFilter.frequency.value = SETTINGS.voiceBoostBand.frequencyHz;
+    voiceBoostFilter.Q.value = SETTINGS.voiceBoostBand.q;
+    voiceBoostFilter.gain.value = 0; // 0 dB peaking == exact passthrough unless Voice+ is picked
+
     // THREE possible tails, all wired to the speakers; the LAST EQ node (tameFilter)
     // feeds exactly one (see routeClip / activeTail), so switching is instant.
     //  SOFT-CLIP : tameFilter -> shaper -> destination      (default when boosting; boost baked into the curve)
@@ -237,12 +259,13 @@
     limiter.attack.value = lm.attackSec;
     limiter.release.value = lm.releaseSec;
 
-    // EQ chain (frequency order): lowCut -> bass -> mud -> presence -> tame -> tail.
+    // EQ chain (frequency order): lowCut -> bass -> mud -> presence -> voiceBoost -> tame -> tail.
     // Biquads in series are commutative in magnitude, so the order is just for readability.
     lowCutFilter.connect(bassFilter);
     bassFilter.connect(mudFilter);
     mudFilter.connect(presenceFilter);
-    presenceFilter.connect(tameFilter);
+    presenceFilter.connect(voiceBoostFilter);
+    voiceBoostFilter.connect(tameFilter); // tameFilter stays the last EQ node (feeds the tail)
     masterGain.connect(audioContext.destination); // RAW/BASE tail — always wired, fed only when active
     shaper.connect(audioContext.destination); //     SOFT-CLIP tail — always wired, fed only when active
     leveler.connect(makeupGain); //                   STABLE-VOL tail: build it, wire it to the speakers,
@@ -436,6 +459,7 @@
     mudFilter.gain.value = preset.mudGainDb;
     presenceFilter.gain.value = preset.presenceGainDb;
     tameFilter.gain.value = preset.tameGainDb;
+    voiceBoostFilter.gain.value = preset.voiceBoostGainDb;
   }
 
   // Bring the graph up, hook gestures, and take over if we already can — never routing into
