@@ -81,7 +81,7 @@
     presets: {
       default: { bassGainDb: 0, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0 }, // flat
       bass: { bassGainDb: 14, mudGainDb: 0, presenceGainDb: 0, tameGainDb: 0 }, // boomy
-      voice: { bassGainDb: -2, mudGainDb: -4, presenceGainDb: 3, tameGainDb: -3 },
+      voice: { bassGainDb: -1, mudGainDb: -3, presenceGainDb: 3, tameGainDb: -3 },
       //        clarity recipe: mud cut to un-muffle, a small presence lift (never pierces),
       //        a soft top-shelf to smooth sibilance — the 80 Hz high-pass handles the rumble.
     },
