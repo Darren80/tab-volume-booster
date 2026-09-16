@@ -95,7 +95,7 @@ function renderHint(state) {
     // otherwise privileged embed), so it's genuinely out of reach.
     warn = true;
     message =
-      "The audio is playing inside an embedded player I can't reach — boosting it MAY not work.";
+      "The audio is playing inside an embedded player — boosting it MAY not work.";
   } else if (state.blockedMedia > 0) {
     // Media loaded from another site without CORS: unroutable.
     warn = true;
