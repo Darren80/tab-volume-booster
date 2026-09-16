@@ -36,12 +36,23 @@ const BADGE_FG = "#ffffff"; // white number for contrast
 const DEFAULT_TITLE = "Crescendo — Tab Volume Booster"; // hover label at normal volume
 const PERCENT_TITLE = "Crescendo — "; // hover label when boosted
 
+// Per-preset toolbar icon. The Voice and Bass presets swap the plain speaker for
+// one carrying a gradient "VB"/"BB" badge, so the active preset shows on the tab's
+// icon (independently of the volume badge). "default" (Flat) keeps the plain icon.
+const DEFAULT_ICON = "icons/icon.svg";
+const PRESET_ICONS = {
+  voice: "icons/icon-voice.svg",
+  bass: "icons/icon-bass.svg",
+};
+const iconFor = (preset) => PRESET_ICONS[preset] || DEFAULT_ICON;
+
 const keyFor = (tabId) => `tab-${tabId}`;
 
-// Per-tab, per-frame last-reported volume, so the badge can show the tab's
-// strongest boost. tabId -> Map(frameId -> percent). In-memory only: it's purely
-// cosmetic, and frames re-report as they load, so losing it (event-page unload)
-// self-heals. It's reset when the top frame navigates (see webNavigation below).
+// Per-tab, per-frame last-reported state, so the badge can show the tab's strongest
+// boost and the icon can reflect the active preset. tabId -> Map(frameId ->
+// { percent, preset }). In-memory only: it's purely cosmetic, and frames re-report
+// as they load, so losing it (event-page unload) self-heals. It's reset when the
+// top frame navigates (see webNavigation below).
 const tabFrames = new Map();
 
 // Firefox's badge only fits ~3–4 (narrow) characters. Up to three digits the raw
@@ -62,29 +73,37 @@ function titleText(percent) {
   return `${PERCENT_TITLE}${percent}% boost`;
 }
 
-// Paint the badge for a tab from the strongest boost across its frames. Each call
-// is wrapped: a tab can vanish (closed/navigated) between a report and here, which
+// Paint the badge + icon for a tab from its frames. The badge shows the strongest
+// boost; the icon reflects the active preset (any non-default preset a frame
+// reports — the popup sets the preset tab-wide, so frames agree). Each call is
+// wrapped: a tab can vanish (closed/navigated) between a report and here, which
 // rejects the promise — harmless, so swallow it.
 function refreshBadge(tabId) {
   if (tabId == null) return;
   const frames = tabFrames.get(tabId);
   let peak = DEFAULT_PERCENT;
-  if (frames) for (const percent of frames.values()) if (percent > peak) peak = percent;
+  let preset = "default";
+  if (frames)
+    for (const state of frames.values()) {
+      if (state.percent > peak) peak = state.percent;
+      if (state.preset && state.preset !== "default") preset = state.preset;
+    }
   api.action.setBadgeText({ tabId, text: badgeText(peak) }).catch(() => {});
   api.action.setBadgeBackgroundColor({ tabId, color: BADGE_BG }).catch(() => {});
   // setBadgeTextColor isn't in every build; ignore if unavailable.
   api.action.setBadgeTextColor?.({ tabId, color: BADGE_FG }).catch(() => {});
   api.action.setTitle({ tabId, title: titleText(peak) }).catch(() => {});
+  api.action.setIcon({ tabId, path: iconFor(preset) }).catch(() => {});
 }
 
-function recordFrameVolume(tabId, frameId, percent) {
+function recordFrameState(tabId, frameId, percent, preset) {
   if (tabId == null) return;
   let frames = tabFrames.get(tabId);
   if (!frames) {
     frames = new Map();
     tabFrames.set(tabId, frames);
   }
-  frames.set(frameId ?? 0, percent);
+  frames.set(frameId ?? 0, { percent, preset });
   refreshBadge(tabId);
 }
 
@@ -95,7 +114,7 @@ api.runtime.onMessage.addListener((message, sender) => {
     // A frame's volume/preset changed: fold it into the tab's badge and remember
     // it. (Storage is per-tab; when several frames are boosted the last write
     // wins, which is fine — restore just needs a boost to re-apply on reload.)
-    recordFrameVolume(tabId, sender.frameId, message.volume);
+    recordFrameState(tabId, sender.frameId, message.volume, message.preset);
     if (tabId != null) {
       api.storage.session
         .set({ [keyFor(tabId)]: { volume: message.volume, preset: message.preset } })
@@ -124,6 +143,7 @@ api.webNavigation?.onCommitted.addListener((details) => {
   tabFrames.delete(details.tabId);
   api.action.setBadgeText({ tabId: details.tabId, text: "" }).catch(() => {});
   api.action.setTitle({ tabId: details.tabId, title: DEFAULT_TITLE }).catch(() => {});
+  api.action.setIcon({ tabId: details.tabId, path: DEFAULT_ICON }).catch(() => {});
 });
 
 // Tidy up a tab's saved state when it closes (session storage would clear it on
