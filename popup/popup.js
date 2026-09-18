@@ -267,6 +267,42 @@ async function broadcast(message) {
   return mine ?? replies.find((r) => r?.ok) ?? null;
 }
 
+// Coalesce a burst of mutating broadcasts into "one in flight, newest wins".
+// Callers still update the UI synchronously (so it never lags), but the actual
+// message to the tab is collapsed: while one broadcast is in flight, later calls
+// only overwrite the pending value instead of queueing. Without this, a fast
+// slider drag fires a message per `input` event; the content script drains them
+// one by one (each rebuilding the soft-clip curve across every frame), so the
+// audio keeps climbing for a beat after you stop. Latest-wins keeps it snappy.
+function coalesceBroadcast() {
+  let inFlight = false;
+  let pending = null; // { message, onReply } — only the most recent is kept
+
+  async function pump() {
+    if (inFlight || !pending) return;
+    inFlight = true;
+    const { message, onReply } = pending;
+    pending = null;
+    let reply = null;
+    try {
+      reply = await broadcast(message);
+    } finally {
+      inFlight = false;
+    }
+    // `settled` = no newer value is queued, so this reply is the final word. UI
+    // that moves a control (e.g. the EQ faders) should only follow a settled
+    // reply, or a stale one would yank the thumb back mid-drag until the next
+    // send lands. Hints, which don't depend on the exact value, can update always.
+    onReply?.(reply, pending === null);
+    pump(); // send whatever the user asked for while this one was in flight
+  }
+
+  return (message, onReply) => {
+    pending = { message, onReply };
+    pump();
+  };
+}
+
 // Send to a specific frame (used while probing every frame for its state).
 async function sendToFrame(frameId, message) {
   if (activeTabId == null) return null;
@@ -425,11 +461,14 @@ function stepVolume(from, direction) {
   return clampVolume(from + (direction > 0 ? STEP : -STEP));
 }
 
-// One place to apply a new volume: reflect it in the UI and tell the tab.
-async function commitVolume(percent) {
+// One place to apply a new volume: reflect it in the UI instantly, then tell the
+// tab. The send is coalesced (see coalesceBroadcast) so a fast drag never backs
+// up a queue of set-volume messages — the tab always converges to the last value.
+const sendVolume = coalesceBroadcast();
+function commitVolume(percent) {
   const clamped = clampVolume(percent);
-  renderVolume(clamped);
-  renderHint(await broadcast({ type: "set-volume", value: clamped }));
+  renderVolume(clamped); // instant, every event — the UI must not wait on the tab
+  sendVolume({ type: "set-volume", value: clamped }, (state) => renderHint(state));
 }
 
 slider.addEventListener("input", () => {
@@ -510,11 +549,14 @@ function stepDb(from, direction) {
 // Apply a band's new gain: reflect it instantly, tell the tab, then re-sync the
 // preset highlight + "Custom" tag from the reply. We send only the band that moved
 // (the content script merges it), so the other band stays put.
+const sendEq = coalesceBroadcast();
 function commitEq(band, input, output, db) {
   const snapped = snapDb(db);
   setFader(input, output, snapped); // instant feedback; the reply confirms it
-  broadcast({ type: "set-eq", eq: { [band]: snapped } }).then((state) => {
-    if (!state) return;
+  // Coalesced like the volume send, so dragging a band doesn't queue a message
+  // per input event. The content script merges each set-eq, so latest-wins is safe.
+  sendEq({ type: "set-eq", eq: { [band]: snapped } }, (state, settled) => {
+    if (!state || !settled) return; // ignore stale replies so the fader doesn't jump back
     renderPreset(state.preset);
     renderEq(state);
     renderHint(state);
