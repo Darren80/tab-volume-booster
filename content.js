@@ -140,6 +140,7 @@
   let makeupGain = null; // the slider's boost, applied AFTER compression (like mastering makeup gain)
   let limiter = null; // DynamicsCompressor as a fast brickwall — final true-peak safety
   let levelerEnabled = SETTINGS.stableVolume.enabled; // live toggle via setLevelerEnabled()
+  let eqNodes = {}; // gainKey -> its BiquadFilter, populated in buildGraph (see EQ_BANDS)
   let gesturesHooked = false;
 
   const wired = new WeakSet(); // elements routed through the graph
@@ -154,11 +155,21 @@
   let eqGains = { ...SETTINGS.presets.default };
   let engaged = false; // the user has asked us to take over
 
+  // The user-adjustable EQ bands the popup shows as sliders, in display order. This is
+  // the ONE list that ties each preset gain key to its filter band and the label the
+  // popup prints — getState ships it to the popup, which builds a slider per entry. To
+  // add / remove / rename / re-tune a fader, edit here (+ the matching `presets` gain
+  // key and, for a brand-new band, its node in buildGraph); nothing else hardcodes a band.
+  const EQ_BANDS = [
+    { gainKey: "bassGainDb", label: "Bass", frequencyHz: SETTINGS.bassBand.frequencyHz },
+    { gainKey: "voiceBoostGainDb", label: "Voice", frequencyHz: SETTINGS.voiceBoostBand.frequencyHz },
+  ];
+
   // Which named preset (if any) do the current EQ gains correspond to? Returns the
-  // preset key when the gains match one exactly, otherwise "custom" (a hand-tuned tone).
+  // preset key when every band matches one exactly, otherwise "custom" (a hand-tuned tone).
   function presetNameFor(gains) {
     for (const [name, preset] of Object.entries(SETTINGS.presets)) {
-      if (preset.bassGainDb === gains.bassGainDb && preset.voiceBoostGainDb === gains.voiceBoostGainDb) {
+      if (EQ_BANDS.every((b) => (preset[b.gainKey] || 0) === (gains[b.gainKey] || 0))) {
         return name;
       }
     }
@@ -205,6 +216,10 @@
     voiceBoostFilter.frequency.value = SETTINGS.voiceBoostBand.frequencyHz;
     voiceBoostFilter.Q.value = SETTINGS.voiceBoostBand.q;
     voiceBoostFilter.gain.value = 0; // 0 dB peaking == exact passthrough unless Voice+ is picked
+
+    // Map each EQ band's gain key to its filter node, so applyPresetNodes can push the
+    // gains generically (one entry per EQ_BANDS row).
+    eqNodes = { bassGainDb: bassFilter, voiceBoostGainDb: voiceBoostFilter };
 
     // THREE possible tails, all wired to the speakers; the LAST EQ node (voiceBoostFilter)
     // feeds exactly one (see routeClip / activeTail), so switching is instant.
@@ -291,7 +306,7 @@
   // OR any EQ band lifted off 0 dB. The soft clipper and high-pass key off this together;
   // when it's false (100% + every band flat) the chain collapses to a bit-for-bit passthrough.
   function processingEngaged() {
-    return currentVolume > 1 || eqGains.bassGainDb !== 0 || eqGains.voiceBoostGainDb !== 0;
+    return currentVolume > 1 || EQ_BANDS.some((b) => (eqGains[b.gainKey] || 0) !== 0);
   }
 
   // Which tail should the last EQ node feed right now? One place decides:
@@ -449,10 +464,12 @@
   }
 
   // Push the current EQ gains onto the filter nodes (the one place that touches them).
+  // Data-driven from EQ_BANDS -> eqNodes, so it needs no edits when a band is added.
   function applyPresetNodes() {
-    if (!bassFilter) return;
-    bassFilter.gain.value = eqGains.bassGainDb;
-    voiceBoostFilter.gain.value = eqGains.voiceBoostGainDb;
+    for (const band of EQ_BANDS) {
+      const node = eqNodes[band.gainKey];
+      if (node) node.gain.value = eqGains[band.gainKey] || 0;
+    }
   }
 
   // Clamp an EQ gain to the fader range so a stray/hand-crafted message can't push a
@@ -520,8 +537,10 @@
   // and routes. The preset name is DERIVED afterwards — matching a preset re-lights its
   // button, anything else reads as "custom".
   function setEq(gains) {
-    if (gains && "bassGainDb" in gains) eqGains.bassGainDb = clampEqDb(gains.bassGainDb);
-    if (gains && "voiceBoostGainDb" in gains) eqGains.voiceBoostGainDb = clampEqDb(gains.voiceBoostGainDb);
+    if (!gains) return;
+    for (const band of EQ_BANDS) {
+      if (band.gainKey in gains) eqGains[band.gainKey] = clampEqDb(gains[band.gainKey]);
+    }
     applyEq();
   }
 
@@ -557,9 +576,15 @@
       ok: true,
       volume: Math.round(currentVolume * 100),
       preset: currentPresetName(),
-      // Current EQ band gains + the fader range, both from SETTINGS, so the popup's
-      // faders are positioned and sized from one place.
-      eq: { ...eqGains },
+      // The EQ, described entirely from this side so the popup builds its sliders from
+      // one source: the band list (key/label/frequency + current gain) and the shared
+      // dB range. Change a band or the range in SETTINGS/EQ_BANDS and the popup follows.
+      eqBands: EQ_BANDS.map((b) => ({
+        gainKey: b.gainKey,
+        label: b.label,
+        frequencyHz: b.frequencyHz,
+        gainDb: eqGains[b.gainKey] || 0,
+      })),
       eqRange: { minDb: SETTINGS.eq.minDb, maxDb: SETTINGS.eq.maxDb, stepDb: SETTINGS.eq.stepDb },
       // Volume range comes from SETTINGS so the popup slider is sized from one place.
       minPercent: SETTINGS.volume.minPercent,

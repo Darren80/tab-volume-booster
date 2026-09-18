@@ -73,6 +73,23 @@
         Reset to 100&thinsp;%
       </button>
 
+      <!-- Interactive EQ — appears only when a Voice/Bass preset (or a hand-tuned
+           "custom" tone) is active. Each band is a horizontal slider that behaves
+           exactly like the volume slider (drag, click-in-margin, mouse wheel).
+           Bracketed top and bottom by horizontal rules to mark it as its own
+           section. popup.js wires each band; slider-hover.js adds the wheel. -->
+      <section id="eqPanel" class="eq" aria-label="Equalizer" hidden>
+        <div class="eq-head">
+          <span class="section-label">Equalizer</span>
+          <!-- Always in the layout (its space is reserved) so toggling it never
+               reflows the sliders below; popup.js flips only its visibility. -->
+          <span id="eqTag" class="eq-tag eq-tag--hidden">Custom</span>
+        </div>
+        <!-- One .eq-band slider per band is built here by popup.js from get-state's
+             eqBands list (defined in content.js EQ_BANDS). -->
+        <div id="eqBands" class="eq-bands"></div>
+      </section>
+
       <section class="tabs">
         <div id="nowPlayingLabel" class="section-label" hidden>Now playing</div>
         <ul id="tabsList" class="tabs-list" hidden></ul>

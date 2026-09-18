@@ -25,6 +25,23 @@ const tabsList = document.getElementById("tabsList");
 const nowPlayingLabel = document.getElementById("nowPlayingLabel");
 const statusHint = document.getElementById("statusHint");
 const stars = document.getElementById("stars");
+const eqPanel = document.getElementById("eqPanel");
+const eqTag = document.getElementById("eqTag");
+const eqBandsContainer = document.getElementById("eqBands");
+
+// EQ popup knobs — layout/interaction only (the audio params live in content.js
+// SETTINGS). Grouped here so the popup's tunables are also in one place.
+const EQ_UI = {
+  // How far (px) around each EQ track the wheel / click-in-margin still acts. Smaller
+  // than the volume slider's margin so the two bands don't grab each other's scrolls.
+  wheelHitPaddingPixels: 5,
+};
+
+// Built EQ sliders, keyed by their gain key (e.g. "bassGainDb") -> { input, output }.
+// Populated by buildEqRows from the content script's band list; the popup never
+// hardcodes which bands exist.
+const eqControls = new Map();
+let eqSignature = ""; // the band set currently built, so we only rebuild when it changes
 
 let activeTabId = null;
 let activeFrameId = 0; // the frame the popup drives — the one that actually has the media
@@ -35,6 +52,7 @@ let tabAudible = false; // set by renderNowPlaying: is the current tab making so
 function setControlsEnabled(enabled) {
   slider.disabled = !enabled;
   presetButtons.forEach((b) => (b.disabled = !enabled));
+  for (const { input } of eqControls.values()) input.disabled = !enabled;
   resetButton.disabled = !enabled || Number(slider.value) === DEFAULT;
 }
 
@@ -69,6 +87,110 @@ function renderPreset(name) {
   presetButtons.forEach((b) =>
     b.classList.toggle("active", b.dataset.preset === currentPreset)
   );
+}
+
+// The EQ fader range/step, owned by the content script (SETTINGS.eq) and delivered
+// via get-state, so it's defined in one place. These are only fallbacks.
+let EQ_MIN = 0;
+let EQ_MAX = 18;
+let EQ_STEP = 1;
+
+// Boost-only bands, so a positive gain reads "+N dB"; 0 is plain "0 dB".
+function formatDb(db) {
+  return `${db > 0 ? "+" : ""}${db} dB`;
+}
+
+// Position one band's slider + readout from its gain (in dB). Sets the slider's own
+// --fill so its gradient fills like the volume slider (which reads --fill off :root;
+// an inline value on the element wins for that slider only).
+function setFader(input, output, db) {
+  input.value = db;
+  output.textContent = formatDb(db);
+  const span = Number(input.max) - Number(input.min) || 1;
+  input.style.setProperty("--fill", `${((db - Number(input.min)) / span) * 100}%`);
+}
+
+// Format a band's centre frequency for its label: "120 Hz", "1.5 kHz", "10 kHz".
+function formatHz(hz) {
+  if (hz >= 1000) {
+    const k = hz / 1000;
+    return `${Number.isInteger(k) ? k : k.toFixed(1)} kHz`;
+  }
+  return `${hz} Hz`;
+}
+
+// Build one slider row per band from the content script's band list. Rebuilt only
+// when the set of bands changes (see eqSignature), so normal updates just re-point
+// values. Each row reuses .slider, so it looks and behaves like the volume slider.
+function buildEqRows(bands, range) {
+  eqBandsContainer.textContent = "";
+  eqControls.clear();
+  for (const band of bands) {
+    const row = document.createElement("div");
+    row.className = "eq-band";
+
+    const top = document.createElement("div");
+    top.className = "eq-band-top";
+    const name = document.createElement("span");
+    name.className = "eq-name";
+    name.textContent = `${band.label} `;
+    const freq = document.createElement("span");
+    freq.className = "eq-freq";
+    freq.textContent = formatHz(band.frequencyHz);
+    name.appendChild(freq);
+    const output = document.createElement("output");
+    output.className = "eq-val";
+    top.append(name, output);
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.className = "slider eq-slider";
+    input.min = range.minDb;
+    input.max = range.maxDb;
+    input.step = range.stepDb;
+    input.value = band.gainDb;
+    input.setAttribute("aria-label", `${band.label} gain in decibels`);
+
+    row.append(top, input);
+    eqBandsContainer.appendChild(row);
+
+    eqControls.set(band.gainKey, { input, output });
+    wireEqBand(band.gainKey, input, output, row); // native input + shared wheel/click
+  }
+}
+
+// The EQ panel is the tone control, so it shows only when the tone is non-flat:
+// a Voice/Bass preset, or a hand-tuned "custom" mix. On Flat (every band 0 dB)
+// there's nothing to edit, so it stays hidden. Sliders and the "Custom" tag follow
+// the content script's authoritative gains.
+function renderEq(state) {
+  const show =
+    !!state && state.preset !== "default" && Array.isArray(state.eqBands);
+  eqPanel.hidden = !show;
+  if (!show) return;
+
+  const range = state.eqRange || { minDb: EQ_MIN, maxDb: EQ_MAX, stepDb: EQ_STEP };
+  EQ_MIN = range.minDb;
+  EQ_MAX = range.maxDb;
+  EQ_STEP = range.stepDb;
+
+  // (Re)build rows only when the band set itself changes.
+  const signature = state.eqBands.map((b) => b.gainKey).join(",");
+  if (signature !== eqSignature) {
+    buildEqRows(state.eqBands, range);
+    eqSignature = signature;
+  }
+
+  for (const band of state.eqBands) {
+    const control = eqControls.get(band.gainKey);
+    if (!control) continue;
+    control.input.min = EQ_MIN;
+    control.input.max = EQ_MAX;
+    control.input.step = EQ_STEP;
+    setFader(control.input, control.output, band.gainDb);
+  }
+  // Toggle only visibility (space stays reserved) so this never reflows the sliders.
+  eqTag.classList.toggle("eq-tag--hidden", state.preset !== "custom");
 }
 
 function renderHint(state) {
@@ -269,6 +391,7 @@ async function init() {
     applyRange(state.minPercent, state.maxPercent, state.defaultPercent);
     renderVolume(state.volume);
     renderPreset(state.preset);
+    renderEq(state);
     renderHint(state);
   } else {
     // Couldn't reach the content script in any frame (e.g. page loaded before
@@ -357,6 +480,7 @@ presetButtons.forEach((button) => {
     const state = await broadcast({ type: "set-preset", name });
     renderPreset(state?.preset ?? name);
     if (state) renderVolume(state.volume);
+    renderEq(state);
     renderHint(state);
   });
 });
@@ -366,9 +490,52 @@ resetButton.addEventListener("click", async () => {
   if (state) {
     renderVolume(state.volume);
     renderPreset(state.preset);
+    renderEq(state);
     renderHint(state);
   }
 });
+
+// EQ bands: each slider behaves exactly like the volume slider — drag the thumb,
+// click in the margin, or mouse-wheel over it. The dB grid mirrors the volume grid.
+function clampDb(db) {
+  return Math.min(EQ_MAX, Math.max(EQ_MIN, db));
+}
+function snapDb(db) {
+  return clampDb(Math.round(db / EQ_STEP) * EQ_STEP);
+}
+function stepDb(from, direction) {
+  return clampDb(from + (direction > 0 ? EQ_STEP : -EQ_STEP));
+}
+
+// Apply a band's new gain: reflect it instantly, tell the tab, then re-sync the
+// preset highlight + "Custom" tag from the reply. We send only the band that moved
+// (the content script merges it), so the other band stays put.
+function commitEq(band, input, output, db) {
+  const snapped = snapDb(db);
+  setFader(input, output, snapped); // instant feedback; the reply confirms it
+  broadcast({ type: "set-eq", eq: { [band]: snapped } }).then((state) => {
+    if (!state) return;
+    renderPreset(state.preset);
+    renderEq(state);
+    renderHint(state);
+  });
+}
+
+// Wire one band (called by buildEqRows for each slider it creates): native
+// drag/keyboard fire "input"; slider-hover adds the shared wheel + click-in-margin
+// behaviour, using the band row as its hit zone with the EQ's own smaller margin.
+function wireEqBand(band, input, output, zone) {
+  const commit = (db) => commitEq(band, input, output, db);
+  input.addEventListener("input", () => commit(Number(input.value)));
+  attachSliderControls({
+    slider: input,
+    zone,
+    snap: snapDb,
+    step: stepDb,
+    commit,
+    padding: EQ_UI.wheelHitPaddingPixels,
+  });
+}
 
 // Rating. Each star carries a value 1–5. A happy rating (4–5) goes to the store;
 // a lukewarm-or-worse one (1–3) is intercepted — instead of sending a less-than-

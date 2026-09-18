@@ -27,46 +27,43 @@ const SETTINGS = {
 };
 // ────────────────────────────────────────────────────────────────────────
 
-// popup.js calls initSliderHover(...) once it has the slider and its helpers.
-function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
-  const { hitAreaPaddingPixels, hitZoneSelector, dialSelector } = SETTINGS;
-
-  const zone =
-    slider.closest(hitZoneSelector) || slider.closest(".slider-wrap") || slider;
-
+// Give a horizontal slider the "feels bigger than it looks" behaviour: the wheel,
+// the cursor, and click-to-move all work within hitAreaPaddingPixels of the thin
+// track. `zone` is the element the listeners sit on — it must enclose the slider
+// plus that padding on all four sides. `snap`/`step`/`commit` mirror the volume
+// helpers: snap(value)→grid value, step(from, dir)→one notch, commit(value)→apply.
+// Reused for the volume slider AND each EQ band, so they all behave identically.
+function attachSliderControls({ slider, zone, snap, step, commit, padding }) {
+  const pad = padding ?? SETTINGS.hitAreaPaddingPixels;
   const clampFraction = (fraction) => Math.min(1, Math.max(0, fraction));
 
-  // Is the pointer over the slider, or within hitAreaPaddingPixels of its box? The wheel,
-  // the cursor, and click-to-move all share this one test, so their active
-  // regions line up exactly on every side.
+  // Is the pointer over the slider, or within `pad` of its box? The wheel, the
+  // cursor, and click-to-move all share this one test, so their active regions
+  // line up exactly on every side.
   function nearSlider(event) {
     if (slider.disabled) return false;
-    const sliderBox = slider.getBoundingClientRect();
+    const box = slider.getBoundingClientRect();
     return (
-      event.clientX >= sliderBox.left - hitAreaPaddingPixels &&
-      event.clientX <= sliderBox.right + hitAreaPaddingPixels &&
-      event.clientY >= sliderBox.top - hitAreaPaddingPixels &&
-      event.clientY <= sliderBox.bottom + hitAreaPaddingPixels
+      event.clientX >= box.left - pad &&
+      event.clientX <= box.right + pad &&
+      event.clientY >= box.top - pad &&
+      event.clientY <= box.bottom + pad
     );
   }
 
-  // Map a pointer X to a snapped volume, reading the live range off the slider.
-  function volumeFromX(clientX) {
-    const sliderBox = slider.getBoundingClientRect();
-    const fraction = clampFraction((clientX - sliderBox.left) / sliderBox.width);
-    const rangeMin = Number(slider.min);
-    const rangeMax = Number(slider.max);
-    return snapVolume(rangeMin + fraction * (rangeMax - rangeMin));
+  // Map a pointer X to a snapped value, reading the live range off the slider.
+  function valueFromX(clientX) {
+    const box = slider.getBoundingClientRect();
+    const fraction = clampFraction((clientX - box.left) / box.width);
+    return snap(Number(slider.min) + fraction * (Number(slider.max) - Number(slider.min)));
   }
 
-  // One wheel notch = one step (up = louder). Shared by the slider and the dial.
+  // One wheel notch = one step (up = more).
   function wheelNudge(event) {
     event.preventDefault(); // don't scroll the popup while adjusting
-    const direction = event.deltaY < 0 ? 1 : -1; // wheel up → louder
-    commitVolume(stepVolume(Number(slider.value), direction));
+    const direction = event.deltaY < 0 ? 1 : -1; // wheel up → increase
+    commit(step(Number(slider.value), direction));
   }
-
-  // --- Slider: wheel + cursor + click over the padded hit region ----------
 
   zone.addEventListener(
     "wheel",
@@ -92,8 +89,8 @@ function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
     }
     event.preventDefault();
     zone.setPointerCapture(event.pointerId);
-    commitVolume(volumeFromX(event.clientX));
-    const onMove = (moveEvent) => commitVolume(volumeFromX(moveEvent.clientX));
+    commit(valueFromX(event.clientX));
+    const onMove = (moveEvent) => commit(valueFromX(moveEvent.clientX));
     const onUp = () => {
       zone.removeEventListener("pointermove", onMove);
       zone.removeEventListener("pointerup", onUp);
@@ -101,6 +98,30 @@ function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
     zone.addEventListener("pointermove", onMove);
     zone.addEventListener("pointerup", onUp);
   });
+}
+
+// popup.js calls initSliderHover(...) once it has the volume slider and its helpers.
+function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
+  const { hitZoneSelector, dialSelector } = SETTINGS;
+
+  const zone =
+    slider.closest(hitZoneSelector) || slider.closest(".slider-wrap") || slider;
+
+  // The volume slider gets the shared wheel + cursor + click-to-move behaviour.
+  attachSliderControls({
+    slider,
+    zone,
+    snap: snapVolume,
+    step: stepVolume,
+    commit: commitVolume,
+  });
+
+  // One wheel notch on the dial nudges the volume too (dial is wheel-only).
+  function wheelNudge(event) {
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    commitVolume(stepVolume(Number(slider.value), direction));
+  }
 
   // --- Circular gauge: wheel anywhere inside the ring ---------------------
   // Hit-test against the circle (not its bounding box) so the corners outside

@@ -36,13 +36,15 @@ const BADGE_FG = "#ffffff"; // white number for contrast
 const DEFAULT_TITLE = "Crescendo — Tab Volume Booster"; // hover label at normal volume
 const PERCENT_TITLE = "Crescendo — "; // hover label when boosted
 
-// Per-preset toolbar icon. The Voice and Bass presets swap the plain speaker for
-// one carrying a gradient "VB"/"BB" badge, so the active preset shows on the tab's
-// icon (independently of the volume badge). "default" (Flat) keeps the plain icon.
+// Per-preset toolbar icon. The Voice/Bass presets (and a hand-tuned "custom" tone)
+// swap the plain speaker for one carrying a gradient "VB"/"BB"/"C" badge, so the
+// active preset shows on the tab's icon (independently of the volume badge).
+// "default" (Flat) keeps the plain icon.
 const DEFAULT_ICON = "icons/icon.svg";
 const PRESET_ICONS = {
   voice: "icons/icon-voice.svg",
   bass: "icons/icon-bass.svg",
+  custom: "icons/icon-custom.svg",
 };
 const iconFor = (preset) => PRESET_ICONS[preset] || DEFAULT_ICON;
 
@@ -116,8 +118,15 @@ api.runtime.onMessage.addListener((message, sender) => {
     // wins, which is fine — restore just needs a boost to re-apply on reload.)
     recordFrameState(tabId, sender.frameId, message.volume, message.preset);
     if (tabId != null) {
+      // Stash the EQ gains too so a hand-tuned ("custom") tone survives a reload.
       api.storage.session
-        .set({ [keyFor(tabId)]: { volume: message.volume, preset: message.preset } })
+        .set({
+          [keyFor(tabId)]: {
+            volume: message.volume,
+            preset: message.preset,
+            eq: message.eq,
+          },
+        })
         .catch(() => {});
     }
     return; // no reply needed

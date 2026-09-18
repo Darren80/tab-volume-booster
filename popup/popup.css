@@ -53,6 +53,26 @@ body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", syst
 .reset:active:not(:disabled) { transform: translateY(1px); }
 .reset:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
 
+/* <section class="eq"> — interactive EQ, shown only for a Voice/Bass/custom tone.
+   Each band reuses .slider (identical look + behaviour to the volume slider). The
+   top/bottom borders are the "horizontal bars" that fence off the section. */
+.eq { margin-top: 20px; padding: 16px 2px 6px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.eq-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.eq-head .section-label { margin-bottom: 0; }
+.eq-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #fff; padding: 3px 8px; border-radius: 999px; background: linear-gradient(135deg, var(--acc1), var(--acc2)); }
+/* Kept in the layout so it can't reflow the sliders below — only hidden visually. */
+.eq-tag--hidden { visibility: hidden; }
+/* Vertical padding gives the wheel/click hit-margin room above and below the thin
+   track (slider-hover.js treats this band as the slider's zone). */
+.eq-band { padding: 8px 0 12px; }
+.eq-band-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 11px; }
+.eq-name { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.eq-freq { font-size: 10.5px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+.eq-val { font-size: 12px; font-weight: 700; color: var(--acc-ink); font-variant-numeric: tabular-nums; }
+/* .eq-slider is just .slider with a hair less thumb; the fill %/track come from .slider. */
+.eq-slider::-webkit-slider-thumb { width: 20px; height: 20px; }
+.eq-slider::-moz-range-thumb { width: 20px; height: 20px; }
+
 /* <section class="tabs"> — "Now playing" label + single now-playing row */
 .tabs { margin-top: 20px; }
 .section-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); margin-bottom: 9px; }
