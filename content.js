@@ -74,6 +74,17 @@
       //        else — a BOOST (louder/fuller), riding through the soft clipper so it won't harsh-clip.
     },
 
+    // ---- EQ faders: the dB range the popup's per-band sliders span. ----------
+    //  Boost-only, like the volume slider — this add-on lifts bands, never cuts them.
+    //  The presets above are just points inside this range that the faders snap to;
+    //  dragging a fader past a preset puts the tone into a "custom" state. Widen the
+    //  range here (e.g. minDb: -12) if you ever want the faders to cut as well as boost.
+    eq: {
+      minDb: 0, // flat (no lift)
+      maxDb: 18, // headroom above the strongest preset (Bass +14 dB)
+      stepDb: 1, // fader granularity
+    },
+
     // ---- The soft clipper: the anti-clipping stage at the end of the chain. --
     //  When the boost pushes peaks past the digital ceiling (±1.0), instead of chopping
     //  them square (harsh clipping) we ROUND them off into warm saturation, acting only on
@@ -129,15 +140,31 @@
   let makeupGain = null; // the slider's boost, applied AFTER compression (like mastering makeup gain)
   let limiter = null; // DynamicsCompressor as a fast brickwall — final true-peak safety
   let levelerEnabled = SETTINGS.stableVolume.enabled; // live toggle via setLevelerEnabled()
-  let observer = null;
   let gesturesHooked = false;
 
   const wired = new WeakSet(); // elements routed through the graph
   const skipped = new WeakSet(); // elements we deliberately left native (cross-origin)
+  const observedRoots = new WeakSet(); // document + open shadow roots we watch for new media
 
   let currentVolume = SETTINGS.volume.defaultPercent / 100; // gain multiplier: 1.0 == 100%
-  let currentPreset = "default";
+  // The per-band EQ gains (in dB) are the single source of truth for the tone. Presets
+  // are just named points in this space; the popup's faders write here directly. The
+  // "current preset" is DERIVED from these gains (presetNameFor): it's a named preset
+  // when the gains match one exactly, else "custom".
+  let eqGains = { ...SETTINGS.presets.default };
   let engaged = false; // the user has asked us to take over
+
+  // Which named preset (if any) do the current EQ gains correspond to? Returns the
+  // preset key when the gains match one exactly, otherwise "custom" (a hand-tuned tone).
+  function presetNameFor(gains) {
+    for (const [name, preset] of Object.entries(SETTINGS.presets)) {
+      if (preset.bassGainDb === gains.bassGainDb && preset.voiceBoostGainDb === gains.voiceBoostGainDb) {
+        return name;
+      }
+    }
+    return "custom";
+  }
+  const currentPresetName = () => presetNameFor(eqGains);
 
   // --- "Tricky" pages: audio we physically can't touch --------------------
   // Streaming services whose hardware-backed DRM never reaches a WebAudio graph we
@@ -261,10 +288,10 @@
   }
 
   // The ONE definition of "the user has asked us to alter the sound": a boost past 100%
-  // OR a non-Flat preset. The soft clipper and high-pass key off this together; when it's
-  // false (100% + Flat) the chain collapses to an exact, bit-for-bit passthrough.
+  // OR any EQ band lifted off 0 dB. The soft clipper and high-pass key off this together;
+  // when it's false (100% + every band flat) the chain collapses to a bit-for-bit passthrough.
   function processingEngaged() {
-    return currentVolume > 1 || currentPreset !== "default";
+    return currentVolume > 1 || eqGains.bassGainDb !== 0 || eqGains.voiceBoostGainDb !== 0;
   }
 
   // Which tail should the last EQ node feed right now? One place decides:
@@ -362,27 +389,47 @@
     }
   }
 
+  // Walk `node` and everything beneath it, CROSSING INTO open shadow roots. The plain
+  // querySelectorAll/MutationObserver pair only sees the light DOM, so a player that
+  // mounts its <video> inside a web component's shadow root — e.g. BBC's Standard Media
+  // Player — is invisible to it and never gets boosted. onMedia fires for each
+  // <video>/<audio>; onRoot fires for the document and each shadow root, so callers can
+  // observe each for elements added later. Closed shadow roots are unreachable
+  // (element.shadowRoot is null) and simply stay native, exactly as before.
+  function walk(node, onMedia, onRoot) {
+    if (node instanceof Element) {
+      if (node.tagName === "VIDEO" || node.tagName === "AUDIO") onMedia?.(node);
+      if (node.shadowRoot) walk(node.shadowRoot, onMedia, onRoot); // dive into the shadow tree too
+    } else if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE || node.nodeType === Node.DOCUMENT_NODE) {
+      onRoot?.(node); // a shadow root, or the document itself
+    }
+    const kids = node.children; // light-DOM children (undefined for text/comment nodes)
+    if (kids) for (const child of kids) walk(child, onMedia, onRoot);
+  }
+
+  // Watch one root (the document or a shadow root) for media added later, pulling any
+  // shadow roots a newly-added subtree brings into the watch set as well. A subtree
+  // MutationObserver can't see across a shadow boundary, so each shadow root needs its
+  // own observer. Each root is observed once (observedRoots), so this stays idempotent.
+  function observeRoot(root) {
+    if (observedRoots.has(root)) return;
+    observedRoots.add(root);
+    const obs = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => walk(node, wireElement, observeRoot));
+      }
+    });
+    obs.observe(root, { childList: true, subtree: true });
+  }
+
   // Only ever called while the context is running.
   function wireAll() {
     if (!audioContext || audioContext.state !== "running") return;
     if (!processingEngaged()) return; // baseline: leave every element native (see wireElement)
-    document.querySelectorAll("video, audio").forEach(wireElement);
+    // Wire every media element (light DOM AND open shadow roots) and watch each root
+    // for more that appear later.
+    walk(document, wireElement, observeRoot);
     masterGain.gain.value = currentVolume;
-    startObserving();
-  }
-
-  function startObserving() {
-    if (observer) return;
-    observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        mutation.addedNodes.forEach((node) => {
-          if (!(node instanceof HTMLElement)) return;
-          if (node.matches("video, audio")) wireElement(node);
-          node.querySelectorAll?.("video, audio").forEach(wireElement);
-        });
-      }
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   // Resume the context from real page gestures (the only thing Firefox accepts).
@@ -401,12 +448,17 @@
     document.addEventListener("play", resume, { capture: true, passive: true });
   }
 
+  // Push the current EQ gains onto the filter nodes (the one place that touches them).
   function applyPresetNodes() {
     if (!bassFilter) return;
-    const preset = SETTINGS.presets[currentPreset] || SETTINGS.presets.default;
-    bassFilter.gain.value = preset.bassGainDb;
-    voiceBoostFilter.gain.value = preset.voiceBoostGainDb;
+    bassFilter.gain.value = eqGains.bassGainDb;
+    voiceBoostFilter.gain.value = eqGains.voiceBoostGainDb;
   }
+
+  // Clamp an EQ gain to the fader range so a stray/hand-crafted message can't push a
+  // band outside what the popup can represent.
+  const clampEqDb = (db) =>
+    Math.min(SETTINGS.eq.maxDb, Math.max(SETTINGS.eq.minDb, Number(db) || 0));
 
   // Bring the graph up, hook gestures, and take over if we already can — never routing into
   // a suspended context. At the 100%+Flat baseline we build nothing until a graph already
@@ -421,15 +473,17 @@
     if (audioContext.state === "running") wireAll();
   }
 
-  // Tell the background page our current volume + preset — it stamps the toolbar badge
-  // and remembers this tab's setting across a refresh. Fire-and-forget; rejects harmlessly.
+  // Tell the background page our current volume + preset + EQ gains — it stamps the
+  // toolbar badge and remembers this tab's setting across a refresh. The EQ gains ride
+  // along so a hand-tuned ("custom") tone survives a reload too. Fire-and-forget.
   function reportState() {
     try {
       api.runtime
         .sendMessage({
           type: "vol-state",
           volume: Math.round(currentVolume * 100),
-          preset: currentPreset,
+          preset: currentPresetName(),
+          eq: { ...eqGains },
         })
         ?.catch(() => {});
     } catch (err) {
@@ -453,21 +507,40 @@
     routeLowCut(); // engage the high-pass only while boosting; exact passthrough at 100%+Flat
   }
 
+  // Load a named preset's gains into the faders (Flat/Voice/Bass). Unknown names fall
+  // back to Flat. This just seeds eqGains, then routes through the shared apply path.
   function applyPreset(name) {
-    currentPreset = name === "bass" || name === "voice" ? name : "default";
+    const preset = SETTINGS.presets[name] || SETTINGS.presets.default;
+    eqGains = { ...preset };
+    applyEq();
+  }
+
+  // Set one or more EQ band gains from the popup's faders. Merges the given bands into
+  // the current gains (so moving one fader doesn't reset the other), clamps to range,
+  // and routes. The preset name is DERIVED afterwards — matching a preset re-lights its
+  // button, anything else reads as "custom".
+  function setEq(gains) {
+    if (gains && "bassGainDb" in gains) eqGains.bassGainDb = clampEqDb(gains.bassGainDb);
+    if (gains && "voiceBoostGainDb" in gains) eqGains.voiceBoostGainDb = clampEqDb(gains.voiceBoostGainDb);
+    applyEq();
+  }
+
+  // The shared tail for both applyPreset and setEq: bring the graph up, push the gains
+  // onto the nodes, and re-point the bypasses. The high-pass and soft clipper drop in
+  // whenever any band is lifted, and out again when every band is back to 0 dB.
+  function applyEq() {
     engage();
     applyPresetNodes();
-    // A preset counts as "processing engaged", so re-point both bypasses: the high-pass
-    // and soft clipper drop in for Voice/Bass, and out again on Flat at 100%.
     routeLowCut();
     routeClip();
-    reportState(); // remember the preset for this tab (and refresh the badge)
+    reportState(); // remember the tone for this tab (and refresh the badge)
   }
 
   // --- State for the popup ----------------------------------------------
 
   function countMedia() {
-    const media = [...document.querySelectorAll("video, audio")];
+    const media = [];
+    walk(document, (element) => media.push(element)); // pierces open shadow roots (see walk)
     let routable = 0;
     let blocked = 0;
     for (const element of media) {
@@ -483,7 +556,11 @@
     return {
       ok: true,
       volume: Math.round(currentVolume * 100),
-      preset: currentPreset,
+      preset: currentPresetName(),
+      // Current EQ band gains + the fader range, both from SETTINGS, so the popup's
+      // faders are positioned and sized from one place.
+      eq: { ...eqGains },
+      eqRange: { minDb: SETTINGS.eq.minDb, maxDb: SETTINGS.eq.maxDb, stepDb: SETTINGS.eq.stepDb },
       // Volume range comes from SETTINGS so the popup slider is sized from one place.
       minPercent: SETTINGS.volume.minPercent,
       maxPercent: SETTINGS.volume.maxPercent,
@@ -512,6 +589,9 @@
         return Promise.resolve(getState());
       case "set-preset":
         applyPreset(message.name);
+        return Promise.resolve(getState());
+      case "set-eq": // { type: "set-eq", eq: { bassGainDb?, voiceBoostGainDb? } } — fader drag
+        setEq(message.eq);
         return Promise.resolve(getState());
       case "reset":
         applyPreset("default");
@@ -545,7 +625,10 @@
   // until the context runs AND the frame has media, see wireAll), so an empty ad frame just
   // holds an idle graph and every frame with media boosts together.
   function applySaved(saved) {
-    if (saved.preset) applyPreset(saved.preset); // also engages the graph
+    // Prefer the exact EQ gains (covers hand-tuned "custom" tones); fall back to the
+    // named preset for states saved before the faders existed. Either engages the graph.
+    if (saved.eq) setEq(saved.eq);
+    else if (saved.preset) applyPreset(saved.preset);
     setVolume(saved.volume); // applies the boost + refreshes badge
   }
 
