@@ -107,12 +107,11 @@
     //  the top peaks so it doesn't squash dynamics like a compressor. Because a WaveShaper
     //  clamps its input to ±1, the boost is baked INTO the curve, rebuilt on every slider move.
     softClip: {
-      enabled: true, // on by default; live-toggle with setSoftClipEnabled() to A/B against raw gain.
-      kneeStartDb: -1, // signal passes as clean linear gain below this; only the last ~0.6 dB up
-      //                 to the ceiling eases into the limit. Lower = warmer/more driven, higher = closer to a brickwall.
-      ceilingDb: -0.4, // the hard ceiling output can never exceed — a hair under 0 dBFS for safety.
-      curveSamples: 16384, // resolution of the shaping lookup table (bigger = finer, costs a little memory).
-      oversample: "4x", // "none" | "2x" | "4x": tames the aliasing that any clipping adds. 4x = smoothest.
+      enabled: true,
+      kneeStartDb: -0.3,
+      ceilingDb: 0,
+      curveSamples: 8192,
+      oversample: "2x",
     },
 
     // ---- "Stable Volume": a YouTube-style loudness path (A/B PROTOTYPE, off by default) --
