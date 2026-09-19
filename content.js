@@ -618,10 +618,6 @@
       case "set-eq": // { type: "set-eq", eq: { bassGainDb?, voiceBoostGainDb? } } — fader drag
         setEq(message.eq);
         return Promise.resolve(getState());
-      case "reset":
-        applyPreset("default");
-        setVolume(100);
-        return Promise.resolve(getState());
       case "set-softclip": // { type: "set-softclip", enabled: true|false }
         setSoftClipEnabled(message.enabled);
         return Promise.resolve(getState());

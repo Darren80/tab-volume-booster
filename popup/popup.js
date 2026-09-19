@@ -19,7 +19,6 @@ const REVIEW_URL =
 
 const slider = document.getElementById("volume");
 const readout = document.getElementById("volumeReadout");
-const resetButton = document.getElementById("reset");
 const presetButtons = [...document.querySelectorAll(".preset")];
 const tabsList = document.getElementById("tabsList");
 const nowPlayingLabel = document.getElementById("nowPlayingLabel");
@@ -53,7 +52,6 @@ function setControlsEnabled(enabled) {
   slider.disabled = !enabled;
   presetButtons.forEach((b) => (b.disabled = !enabled));
   for (const { input } of eqControls.values()) input.disabled = !enabled;
-  resetButton.disabled = !enabled || Number(slider.value) === DEFAULT;
 }
 
 // Size the slider and its end labels from the content script's range (called
@@ -79,7 +77,6 @@ function renderVolume(percent) {
     "--fill",
     `${((percent - MIN) / span) * 100}%`
   );
-  resetButton.disabled = slider.disabled || percent === DEFAULT;
 }
 
 function renderPreset(name) {
@@ -446,6 +443,8 @@ async function init() {
 // 10 % grid the whole way: 10 % is about the smallest boost step that's audible,
 // and there's no sub-100 % region left that would need finer control.
 const STEP = 10;
+// A bigger jump for coarse gestures: PageUp/PageDown and Ctrl+mouse-wheel.
+const COARSE_STEP = 50;
 
 function clampVolume(value) {
   return Math.min(MAX, Math.max(MIN, value));
@@ -456,9 +455,11 @@ function snapVolume(value) {
   return clampVolume(Math.round(value / STEP) * STEP);
 }
 
-// Move one 10 % stop up or down. Used for keyboard nudges.
-function stepVolume(from, direction) {
-  return clampVolume(from + (direction > 0 ? STEP : -STEP));
+// Move one stop up or down. `coarse` (Ctrl held / Page keys) uses the 50 % grid,
+// otherwise the fine 10 % grid. Used for keyboard nudges and the wheel.
+function stepVolume(from, direction, coarse = false) {
+  const size = coarse ? COARSE_STEP : STEP;
+  return clampVolume(from + (direction > 0 ? size : -size));
 }
 
 // One place to apply a new volume: reflect it in the UI instantly, then tell the
@@ -490,10 +491,10 @@ slider.addEventListener("keydown", (event) => {
       next = stepVolume(current, -1);
       break;
     case "PageUp":
-      next = snapVolume(current + 50);
+      next = stepVolume(current, +1, true);
       break;
     case "PageDown":
-      next = snapVolume(current - 50);
+      next = stepVolume(current, -1, true);
       break;
     case "Home":
       next = MIN;
@@ -522,16 +523,6 @@ presetButtons.forEach((button) => {
     renderEq(state);
     renderHint(state);
   });
-});
-
-resetButton.addEventListener("click", async () => {
-  const state = await broadcast({ type: "reset" });
-  if (state) {
-    renderVolume(state.volume);
-    renderPreset(state.preset);
-    renderEq(state);
-    renderHint(state);
-  }
 });
 
 // EQ bands: each slider behaves exactly like the volume slider — drag the thumb,

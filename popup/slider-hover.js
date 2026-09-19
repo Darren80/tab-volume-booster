@@ -58,11 +58,11 @@ function attachSliderControls({ slider, zone, snap, step, commit, padding }) {
     return snap(Number(slider.min) + fraction * (Number(slider.max) - Number(slider.min)));
   }
 
-  // One wheel notch = one step (up = more).
+  // One wheel notch = one step (up = more). Ctrl held → a coarse step.
   function wheelNudge(event) {
     event.preventDefault(); // don't scroll the popup while adjusting
     const direction = event.deltaY < 0 ? 1 : -1; // wheel up → increase
-    commit(step(Number(slider.value), direction));
+    commit(step(Number(slider.value), direction, event.ctrlKey));
   }
 
   zone.addEventListener(
@@ -117,10 +117,11 @@ function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
   });
 
   // One wheel notch on the dial nudges the volume too (dial is wheel-only).
+  // Ctrl held → a coarse step.
   function wheelNudge(event) {
     event.preventDefault();
     const direction = event.deltaY < 0 ? 1 : -1;
-    commitVolume(stepVolume(Number(slider.value), direction));
+    commitVolume(stepVolume(Number(slider.value), direction, event.ctrlKey));
   }
 
   // --- Circular gauge: wheel anywhere inside the ring ---------------------
