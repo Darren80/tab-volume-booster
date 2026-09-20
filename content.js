@@ -1,8 +1,8 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> voiceBoostFilter (peaking) -> [ soft clipper | masterGain | leveler->makeup->limiter ] -> destination
-// The last stage is one of three swappable tails (see activeTail): the soft clipper
-// (default), a plain gain node (raw/transparent), or the "Stable Volume" chain (A/B, off by default).
+//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> voiceBoostFilter (peaking) -> [ soft clipper | masterGain ] -> destination
+// The last stage is one of two swappable tails (see activeTail): the soft clipper
+// (default) or a plain gain node (raw/transparent).
 
 (() => {
   if (window.__tabVolumeBoosterInjected) return;
@@ -90,34 +90,6 @@
       curveSamples: 8192,
       oversample: "2x",
     },
-
-    // ---- "Stable Volume": a YouTube-style loudness path (A/B PROTOTYPE, off by default) --
-    //  Rather than get loudness from raw gain, this COMPRESSES to raise perceived
-    //  loudness, then a limiter only guards the rare true peak — mastering order:
-    //  leveler (compress) -> makeup (the slider) -> limiter. Compression shrinks the
-    //  peak-to-average gap, so makeup gain buys more loudness per dB; flip it live
-    //  (setLeveler(true)) to A/B against the soft clipper.
-    stableVolume: {
-      enabled: false, // OFF by default — this is the A/B alternative to the soft clipper.
-      // The LEVELER: a gentle compressor doing the loudness work (NOT a limiter).
-      // Low ratio + slow-ish attack keeps it from the "muted/pumped" sound of a crushing limiter.
-      leveler: {
-        thresholdDb: -24, // start leveling well below the peaks
-        kneeDb: 24, // soft, gradual onset
-        ratio: 4, // leveling, not limiting (a limiter is >10:1)
-        attackSec: 0.03, // ~30 ms: slow enough to let transients/punch through
-        releaseSec: 0.3, // smooth recovery, no pumping
-      },
-      // The LIMITER: a separate fast brickwall, the final gatekeeper for stray peaks —
-      // does almost nothing most of the time.
-      limiter: {
-        thresholdDb: -2, // catch peaks a hair under 0 dBFS
-        kneeDb: 2,
-        ratio: 20, // effectively a brickwall
-        attackSec: 0.002, // ~2 ms: fast enough to stop overs
-        releaseSec: 0.08,
-      },
-    },
   };
   // ==========================================================================
 
@@ -128,11 +100,6 @@
   let voiceBoostFilter = null; // Voice-only +12 dB bell at 1.5 kHz (Volume Master's voice boost)
   let shaper = null; // WaveShaper doing the soft clipping (with the boost baked into its curve)
   let clipEnabled = SETTINGS.softClip.enabled; // live bypass flag; toggle with setSoftClipEnabled()
-  // "Stable Volume" tail (A/B alternative to the shaper): leveler -> makeup -> limiter.
-  let leveler = null; // DynamicsCompressor doing the loudness work (raises perceived loudness)
-  let makeupGain = null; // the slider's boost, applied AFTER compression (like mastering makeup gain)
-  let limiter = null; // DynamicsCompressor as a fast brickwall — final true-peak safety
-  let levelerEnabled = SETTINGS.stableVolume.enabled; // live toggle via setLevelerEnabled()
   let eqNodes = {}; // gainKey -> its BiquadFilter, populated in buildGraph (see EQ_BANDS)
   let gesturesHooked = false;
 
@@ -215,11 +182,10 @@
     // gains generically (one entry per EQ_BANDS row).
     eqNodes = { bassGainDb: bassFilter, voiceBoostGainDb: voiceBoostFilter };
 
-    // THREE possible tails, all wired to the speakers; the LAST EQ node (voiceBoostFilter)
+    // TWO possible tails, both wired to the speakers; the LAST EQ node (voiceBoostFilter)
     // feeds exactly one (see routeClip / activeTail), so switching is instant.
     //  SOFT-CLIP : voiceBoostFilter -> shaper -> destination      (default when boosting; boost baked into the curve)
     //  RAW/BASE  : voiceBoostFilter -> masterGain -> destination  (transparent at 100%, raw clippable boost above)
-    //  STABLE-VOL: voiceBoostFilter -> leveler -> makeupGain -> limiter -> destination  (off by default; see SETTINGS.stableVolume)
     masterGain = audioContext.createGain();
     masterGain.gain.value = currentVolume;
 
@@ -227,35 +193,12 @@
     shaper.oversample = SETTINGS.softClip.oversample;
     updateShaperCurve(); // bakes the current volume + the soft-clip shape into the curve
 
-    // Stable-Volume tail: leveler (compress) -> makeupGain (slider) -> limiter (brickwall).
-    const lv = SETTINGS.stableVolume.leveler;
-    leveler = audioContext.createDynamicsCompressor();
-    leveler.threshold.value = lv.thresholdDb;
-    leveler.knee.value = lv.kneeDb;
-    leveler.ratio.value = lv.ratio;
-    leveler.attack.value = lv.attackSec;
-    leveler.release.value = lv.releaseSec;
-
-    makeupGain = audioContext.createGain();
-    makeupGain.gain.value = currentVolume; // the boost, applied AFTER compression
-
-    const lm = SETTINGS.stableVolume.limiter;
-    limiter = audioContext.createDynamicsCompressor();
-    limiter.threshold.value = lm.thresholdDb;
-    limiter.knee.value = lm.kneeDb;
-    limiter.ratio.value = lm.ratio;
-    limiter.attack.value = lm.attackSec;
-    limiter.release.value = lm.releaseSec;
-
     // EQ chain (frequency order): lowCut -> bass -> voiceBoost -> tail.
     // Biquads in series are commutative in magnitude, so the order is just for readability.
     lowCutFilter.connect(bassFilter);
     bassFilter.connect(voiceBoostFilter); // voiceBoostFilter is the last EQ node (feeds the tail)
     masterGain.connect(audioContext.destination); // RAW/BASE tail — always wired, fed only when active
     shaper.connect(audioContext.destination); //     SOFT-CLIP tail — always wired, fed only when active
-    leveler.connect(makeupGain); //                   STABLE-VOL tail: build it, wire it to the speakers,
-    makeupGain.connect(limiter); //                   and feed it only when activeTail() selects it
-    limiter.connect(audioContext.destination);
     routeClip(); // point voiceBoostFilter at whichever tail is active
     routeLowCut(); // high-pass on only when boosting/preset; exact passthrough at baseline
 
@@ -305,12 +248,11 @@
 
   // Which tail should the last EQ node feed right now? One place decides:
   //  - Baseline (100% + Flat): masterGain at 1.0 — a bit-transparent passthrough, routing around
-  //    the shaper (which would colour peaks) and the leveler (which would compress).
-  //  - Engaged: leveler chain if Stable-Volume is on, else the shaper if soft-clip is on
-  //    (the default when boosting), else masterGain (the raw, freely-clippable boost, A/B).
+  //    the shaper (which would colour peaks).
+  //  - Engaged: the shaper if soft-clip is on (the default when boosting), else masterGain
+  //    (the raw, freely-clippable boost, A/B).
   function activeTail() {
     if (!processingEngaged()) return masterGain;
-    if (levelerEnabled) return leveler;
     if (clipEnabled) return shaper;
     return masterGain;
   }
@@ -318,7 +260,7 @@
   // Point the last EQ node (voiceBoostFilter) at whichever tail activeTail() picks. Every tail
   // stays wired to the speakers, so this just re-points one connection — safe to flip live.
   function routeClip() {
-    if (!voiceBoostFilter || !masterGain || !shaper || !leveler) return;
+    if (!voiceBoostFilter || !masterGain || !shaper) return;
     try {
       voiceBoostFilter.disconnect();
     } catch (err) {
@@ -349,14 +291,6 @@
     clipEnabled = !!on;
     routeClip();
     return clipEnabled;
-  }
-
-  // Programmatic on/off for the "Stable Volume" tail — the A/B against the soft clipper.
-  // When on, it takes precedence over the soft clipper (see activeTail).
-  function setLevelerEnabled(on) {
-    levelerEnabled = !!on;
-    routeClip();
-    return levelerEnabled;
   }
 
   // Is this source one Web Audio can always tap without a CORS opt-in? blob:/data:/MSE
@@ -594,7 +528,6 @@
     reportState(); // update the toolbar badge + this tab's remembered setting
     engage();
     if (masterGain) masterGain.gain.value = currentVolume; // RAW/BASE path gain
-    if (makeupGain) makeupGain.gain.value = currentVolume; // Stable-Volume path: makeup = the boost
     updateShaperCurve(); // SOFT-CLIP path: rebuild the curve with the new boost baked in
     routeClip(); // engage the shaper only while boosting; bypass it (transparent) at 100%
     routeLowCut(); // engage the high-pass only while boosting; exact passthrough at 100%+Flat
@@ -670,7 +603,6 @@
       engaged,
       contextState,
       softClipEnabled: clipEnabled,
-      levelerEnabled, // "Stable Volume" (compressor) tail on/off — A/B prototype
       // The popup shows a hint when boost is engaged but the context isn't running yet
       // (user needs to click the page), or when some media can't be boosted (cross-origin).
       pending: engaged && contextState !== "running" && counts.routable > 0,
@@ -697,9 +629,6 @@
       case "set-softclip": // { type: "set-softclip", enabled: true|false }
         setSoftClipEnabled(message.enabled);
         return Promise.resolve(getState());
-      case "set-leveler": // { type: "set-leveler", enabled: true|false } — Stable-Volume A/B
-        setLevelerEnabled(message.enabled);
-        return Promise.resolve(getState());
       default:
         return undefined;
     }
@@ -708,13 +637,10 @@
   // Console test hook, from the content script's devtools context:
   //   __tabVolumeBooster.setSoftClip(false)  // hear the raw, clippable boost
   //   __tabVolumeBooster.setSoftClip(true)   // smooth, protected again
-  //   __tabVolumeBooster.setLeveler(true|false)  // A/B the "Stable Volume" path
   // Boost the slider first (the tails only run while engaged), then flip live to A/B.
   window.__tabVolumeBooster = {
     setSoftClip: setSoftClipEnabled,
     isSoftClipEnabled: () => clipEnabled,
-    setLeveler: setLevelerEnabled,
-    isLevelerEnabled: () => levelerEnabled,
   };
 
   // Restore this tab's last volume/preset (survives a refresh, which keeps the tab id).
