@@ -68,6 +68,17 @@
         </button>
       </div>
 
+      <!-- Revert / restore toggle. In "revert" mode it drops the tab to 100 % and
+           flattens the EQ, first remembering the volume + tone you were at; it then
+           flips to "restore" mode ("Revert to 250 %") and the next click brings that
+           exact volume and tone back. Disabled when there's nothing to revert
+           (already 100 % + flat) and nothing saved to restore. Label is filled in by
+           popup.js (updateRevertButton). -->
+      <button id="revert" class="revert" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z" fill="currentColor"/></svg>
+        <span id="revertLabel">Revert to 100&thinsp;%</span>
+      </button>
+
       <!-- Interactive EQ — appears only when a Voice/Bass preset (or a hand-tuned
            "custom" tone) is active. Each band is a horizontal slider that behaves
            exactly like the volume slider (drag, click-in-margin, mouse wheel).

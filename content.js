@@ -3,13 +3,6 @@
 //   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> voiceBoostFilter (peaking) -> [ soft clipper | masterGain | leveler->makeup->limiter ] -> destination
 // The last stage is one of three swappable tails (see activeTail): the soft clipper
 // (default), a plain gain node (raw/transparent), or the "Stable Volume" chain (A/B, off by default).
-//
-// Two hard-won rules (verified in real Firefox):
-// 1. NEVER route a media element into a *suspended* AudioContext — under Firefox's autoplay
-//    policy it starts suspended and resume() only works after a page-level gesture, so a routed
-//    element would go SILENT. We leave audio native until the context is running, then take over.
-// 2. A cross-origin element without CORS produces SILENCE in createMediaElementSource; we detect
-//    those and leave them native rather than muting them.
 
 (() => {
   if (window.__tabVolumeBoosterInjected) return;
@@ -144,7 +137,8 @@
   let gesturesHooked = false;
 
   const wired = new WeakSet(); // elements routed through the graph
-  const skipped = new WeakSet(); // elements we deliberately left native (cross-origin)
+  const skipped = new WeakSet(); // elements we left native (CORS upgrade failed / untouchable)
+  const upgrading = new WeakSet(); // elements mid CORS-upgrade (reloading with crossOrigin set)
   const observedRoots = new WeakSet(); // document + open shadow roots we watch for new media
 
   let currentVolume = SETTINGS.volume.defaultPercent / 100; // gain multiplier: 1.0 == 100%
@@ -365,34 +359,34 @@
     return levelerEnabled;
   }
 
-  // Can this element's audio survive createMediaElementSource without being silenced?
-  // blob:/data:/MSE and same-origin are safe; a cross-origin element only if it opted into CORS.
-  function isRoutable(element) {
-    const src = element.currentSrc || element.src || "";
+  // Is this source one Web Audio can always tap without a CORS opt-in? blob:/data:/MSE
+  // and same-origin media are never tainted; an empty src (nothing loaded yet) counts too.
+  function isSameOriginish(src) {
     if (!src) return true;
     if (src.startsWith("blob:") || src.startsWith("data:") || src.startsWith("mediasource:")) {
       return true;
     }
     try {
-      if (new URL(src, location.href).origin === location.origin) return true;
+      return new URL(src, location.href).origin === location.origin;
     } catch (err) {
       return true;
     }
+  }
+
+  // Can this element's audio survive createMediaElementSource without being silenced *as-is*?
+  // Same-originish always; a cross-origin element only if it already opted into CORS. When this
+  // is false we no longer give up — corsUpgrade() reloads it CORS-enabled (see wireElement).
+  function isRoutable(element) {
+    const src = element.currentSrc || element.src || "";
+    if (isSameOriginish(src)) return true;
     return element.crossOrigin === "anonymous" || element.crossOrigin === "use-credentials";
   }
 
-  function wireElement(element) {
-    if (wired.has(element) || skipped.has(element)) return;
-    // The baseline (100% + Flat) must be truly native — routing an element through the
-    // graph is itself audible, so don't route until the user asks for something. Not marked
-    // skipped, so it stays a candidate wireAll picks up the moment we engage.
-    if (!processingEngaged()) return;
-    if (!isRoutable(element)) {
-      // Cross-origin without CORS: we can't route it, and since we only ever
-      // boost (never cut), there's nothing to do to it — leave it fully native.
-      skipped.add(element);
-      return;
-    }
+  // Route an element into the graph. Only call this once we expect its audio to be
+  // exposable (same-originish, or a CORS-clean cross-origin load) — a tap can't be undone,
+  // so tapping a tainted element would silence it permanently.
+  function tapElement(element) {
+    if (wired.has(element)) return;
     try {
       const source = audioContext.createMediaElementSource(element);
       source.connect(lowCutFilter);
@@ -402,6 +396,88 @@
       // Already routed, or an element we can't touch; leave it alone.
       skipped.add(element);
     }
+  }
+
+  // Make a cross-origin (or not-yet-loaded) element tappable by requesting its media WITH
+  // CORS. Setting crossOrigin + reloading forces the (current or next) fetch to go out
+  // CORS-enabled; if the server allows it the load succeeds and we tap it, if it refuses the
+  // element fires `error` and we roll the attribute back so it keeps playing natively.
+  //
+  // We wait for `loadeddata` before tapping (never tap on a still-tainted element), and for an
+  // element with no src yet we just arm the listeners and wait for the page to load something.
+  function corsUpgrade(element) {
+    if (upgrading.has(element)) return;
+    upgrading.add(element);
+
+    const src = element.currentSrc || element.src || "";
+    const wasPaused = element.paused;
+    const resumeAt = element.currentTime || 0;
+    const hadCrossOrigin = element.hasAttribute("crossorigin");
+
+    const cleanup = () => {
+      element.removeEventListener("loadeddata", onOk);
+      element.removeEventListener("error", onFail);
+    };
+    const onOk = () => {
+      cleanup();
+      upgrading.delete(element);
+      tapElement(element); // CORS-clean now — route it through the graph
+    };
+    const onFail = () => {
+      cleanup();
+      upgrading.delete(element);
+      // Server didn't allow CORS: undo the opt-in so the element loads (and plays) natively
+      // again — unboosted, but audible.
+      skipped.add(element);
+      if (!hadCrossOrigin) element.removeAttribute("crossorigin");
+      try {
+        element.load();
+        if (resumeAt) element.currentTime = resumeAt;
+        if (!wasPaused) element.play().catch(() => {});
+      } catch (err) {
+        /* best effort */
+      }
+    };
+
+    element.addEventListener("loadeddata", onOk, { once: true });
+    element.addEventListener("error", onFail, { once: true });
+
+    element.crossOrigin = "anonymous";
+    // Reload so the current fetch re-runs CORS-enabled. With no src loaded yet, skip the
+    // reload and let the armed listeners fire once the page sets one.
+    if (src) {
+      try {
+        element.load();
+        try {
+          if (resumeAt) element.currentTime = resumeAt;
+        } catch (err) {
+          /* seeking not ready yet */
+        }
+        if (!wasPaused) element.play().catch(() => {});
+      } catch (err) {
+        /* best effort */
+      }
+    }
+  }
+
+  function wireElement(element) {
+    if (wired.has(element) || skipped.has(element) || upgrading.has(element)) return;
+    // The baseline (100% + Flat) must be truly native — routing an element through the
+    // graph is itself audible, so don't route until the user asks for something. Not marked
+    // skipped, so it stays a candidate wireAll picks up the moment we engage.
+    if (!processingEngaged()) return;
+
+    const src = element.currentSrc || element.src || "";
+    // Something is loaded AND it's tappable as-is (same-originish, or already CORS): route now.
+    if (src && isRoutable(element)) {
+      tapElement(element);
+      return;
+    }
+    // Otherwise it's cross-origin without a CORS opt-in, or nothing is loaded yet (its future
+    // src is unknown). Reload it CORS-enabled and tap on success; corsUpgrade rolls back to
+    // native if the server refuses CORS. This is what makes players that swap in a cross-origin
+    // src — e.g. a bare <audio> pointed at a CDN — boostable instead of silently skipped.
+    corsUpgrade(element);
   }
 
   // Walk `node` and everything beneath it, CROSSING INTO open shadow roots. The plain

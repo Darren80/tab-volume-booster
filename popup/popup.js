@@ -28,6 +28,8 @@ const stars = document.getElementById("stars");
 const eqPanel = document.getElementById("eqPanel");
 const eqTag = document.getElementById("eqTag");
 const eqBandsContainer = document.getElementById("eqBands");
+const revertButton = document.getElementById("revert");
+const revertLabel = document.getElementById("revertLabel");
 
 // EQ popup knobs — layout/interaction only (the audio params live in content.js
 // SETTINGS). Grouped here so the popup's tunables are also in one place.
@@ -49,10 +51,55 @@ let framesHaveMedia = false; // did ANY reachable frame report media? (drives th
 let currentPreset = "default";
 let tabAudible = false; // set by renderNowPlaying: is the current tab making sound?
 
+// --- Revert / restore toggle state --------------------------------------
+// The revert button is a two-way memory toggle. `revertSnapshot` holds the
+// { volume, eq } we were at just before reverting to 100 % + flat; while it's set
+// the button is in "restore" mode ("Revert to 250 %") and the next click puts that
+// volume and tone back. It's cleared the moment the user changes anything by hand,
+// so the button never offers to restore a tone that no longer relates to what they
+// hear. `currentEqGains` mirrors the tab's live EQ so we can snapshot it on revert.
+let revertSnapshot = null;
+let currentEqGains = {};
+// True only while the button's own handler drives the volume/EQ, so those
+// programmatic changes don't clear the snapshot the way a manual change does.
+let applyingRevert = false;
+
+// Mirror the tab's current EQ gains from a state reply (getState always ships the
+// full band list), so revert can snapshot the exact tone — presets and custom alike.
+function noteEqGains(state) {
+  if (!state || !Array.isArray(state.eqBands)) return;
+  currentEqGains = {};
+  for (const band of state.eqBands) currentEqGains[band.gainKey] = band.gainDb;
+}
+
+// Drop the saved state and fall back to plain "revert" mode. Called on any manual
+// change (see commitVolume / the preset + EQ handlers) so a stale memory can't linger.
+function clearRevertSnapshot() {
+  if (applyingRevert || revertSnapshot === null) return;
+  revertSnapshot = null;
+  updateRevertButton();
+}
+
+// Point the button's label + enabled state at what the NEXT click will do:
+//  - restore mode (snapshot held): "Revert to <saved> %", always clickable.
+//  - revert mode (no snapshot): "Revert to 100 %", enabled only when there's
+//    actually something to revert (boosted above 100 % or a non-flat tone).
+function updateRevertButton() {
+  if (revertSnapshot) {
+    revertLabel.textContent = `Revert to ${revertSnapshot.volume} %`;
+    revertButton.disabled = slider.disabled;
+  } else {
+    revertLabel.textContent = `Revert to ${DEFAULT} %`;
+    const boosted = Number(slider.value) !== DEFAULT || currentPreset !== "default";
+    revertButton.disabled = slider.disabled || !boosted;
+  }
+}
+
 function setControlsEnabled(enabled) {
   slider.disabled = !enabled;
   presetButtons.forEach((b) => (b.disabled = !enabled));
   for (const { input } of eqControls.values()) input.disabled = !enabled;
+  updateRevertButton(); // its enabled state follows the slider's
 }
 
 // Size the slider and its end labels from the content script's range (called
@@ -78,6 +125,7 @@ function renderVolume(percent) {
     "--fill",
     `${((percent - MIN) / span) * 100}%`
   );
+  updateRevertButton(); // "revert to 100 %" only matters when we're above it
 }
 
 function renderPreset(name) {
@@ -85,6 +133,7 @@ function renderPreset(name) {
   presetButtons.forEach((b) =>
     b.classList.toggle("active", b.dataset.preset === currentPreset)
   );
+  updateRevertButton(); // a non-flat tone also counts as "something to revert"
 }
 
 // The EQ fader range/step, owned by the content script (SETTINGS.eq) and delivered
@@ -245,7 +294,7 @@ async function ensureInjected(tabId) {
   }
 }
 
-// Apply a mutation (set-volume / set-preset / reset) to EVERY frame in the tab,
+// Apply a mutation (set-volume / set-preset / set-eq) to EVERY frame in the tab,
 // so all media frames move together — exactly what a reload does when each frame
 // restores. Every frame applies uniformly; a frame with no media just holds an
 // idle, silent graph (nothing is routed until it's running AND has media). We
@@ -430,6 +479,7 @@ async function init() {
     renderPreset(state.preset);
     renderEq(state);
     renderHint(state);
+    noteEqGains(state);
   } else {
     // Couldn't reach the content script in any frame (e.g. page loaded before
     // install). Don't block the user — show a gentle nudge and let them try.
@@ -473,7 +523,11 @@ const sendVolume = coalesceBroadcast();
 function commitVolume(percent) {
   const clamped = clampVolume(percent);
   renderVolume(clamped); // instant, every event — the UI must not wait on the tab
-  sendVolume({ type: "set-volume", value: clamped }, (state) => renderHint(state));
+  clearRevertSnapshot(); // a hand-moved slider makes any saved "restore" stale (no-op during our own revert)
+  sendVolume({ type: "set-volume", value: clamped }, (state) => {
+    renderHint(state);
+    noteEqGains(state);
+  });
 }
 
 slider.addEventListener("input", () => {
@@ -520,13 +574,50 @@ initSliderHover({ slider, snapVolume, stepVolume, commitVolume });
 
 presetButtons.forEach((button) => {
   button.addEventListener("click", async () => {
+    clearRevertSnapshot(); // picking a tone by hand drops any saved "restore" state
     const name = button.dataset.preset;
     const state = await broadcast({ type: "set-preset", name });
     renderPreset(state?.preset ?? name);
     if (state) renderVolume(state.volume);
     renderEq(state);
     renderHint(state);
+    noteEqGains(state);
   });
+});
+
+// Revert / restore toggle. First click (revert): remember the current volume + tone,
+// then drop to 100 % and flatten the EQ; the label flips to "Revert to <that> %".
+// Next click (restore): put the remembered volume + tone back and reset the label.
+// A manual change to the slider or the tone in between clears the memory (see the
+// commit paths above), so the button only ever restores what it itself put away.
+revertButton.addEventListener("click", async () => {
+  if (revertButton.disabled) return;
+  applyingRevert = true; // our own volume/EQ writes must not clear the snapshot
+  try {
+    let state;
+    if (revertSnapshot) {
+      // Restore: re-apply the saved tone first (covers custom mixes), then the volume.
+      const saved = revertSnapshot;
+      revertSnapshot = null;
+      await broadcast({ type: "set-eq", eq: saved.eq });
+      state = await broadcast({ type: "set-volume", value: saved.volume });
+    } else {
+      // Revert: snapshot where we are, then go to 100 % + flat tone.
+      revertSnapshot = { volume: Number(slider.value), eq: { ...currentEqGains } };
+      await broadcast({ type: "set-preset", name: "default" });
+      state = await broadcast({ type: "set-volume", value: DEFAULT });
+    }
+    if (state) {
+      renderVolume(state.volume);
+      renderPreset(state.preset);
+      renderEq(state);
+      renderHint(state);
+      noteEqGains(state);
+    }
+  } finally {
+    applyingRevert = false;
+    updateRevertButton(); // reflect the new mode/label even if a broadcast returned null
+  }
 });
 
 // EQ bands: each slider behaves exactly like the volume slider — drag the thumb,
@@ -548,6 +639,7 @@ const sendEq = coalesceBroadcast();
 function commitEq(band, input, output, db) {
   const snapped = snapDb(db);
   setFader(input, output, snapped); // instant feedback; the reply confirms it
+  clearRevertSnapshot(); // hand-tuning the tone makes any saved "restore" stale
   // Coalesced like the volume send, so dragging a band doesn't queue a message
   // per input event. The content script merges each set-eq, so latest-wins is safe.
   sendEq({ type: "set-eq", eq: { [band]: snapped } }, (state, settled) => {
@@ -555,6 +647,7 @@ function commitEq(band, input, output, db) {
     renderPreset(state.preset);
     renderEq(state);
     renderHint(state);
+    noteEqGains(state);
   });
 }
 

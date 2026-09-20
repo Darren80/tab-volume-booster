@@ -36,7 +36,7 @@ body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", syst
 .status-hint.warn { color: #9a4b00; background: rgba(249, 168, 37, 0.16); }
 
 /* .presets — Flat / Voice / Bass buttons, with hover/active/disabled/selected states */
-.presets { display: flex; gap: 9px; margin-top: 24px; margin-bottom: 24px; }
+.presets { display: flex; gap: 9px; margin-top: 24px; margin-bottom: 14px; }
 .preset { flex: 1; display: inline-flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; font-size: 12px; font-weight: 600; color: var(--ink); background: linear-gradient(#ffffff, #f8f9fc); border: 1px solid var(--btn-border); border-radius: 14px; box-shadow: var(--shadow-btn); cursor: pointer; transition: transform 0.08s ease, box-shadow 0.12s ease, border-color 0.12s ease; }
 .preset svg { width: 18px; height: 18px; color: var(--muted); }
 .preset:hover:not(:disabled):not(.active) { transform: translateY(-1px); border-color: #c6cad8; box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14); }
@@ -44,6 +44,15 @@ body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", syst
 .preset:disabled { opacity: 0.5; cursor: default; }
 .preset.active { color: #fff; background: linear-gradient(135deg, var(--acc1), var(--acc2)); border-color: transparent; box-shadow: 0 6px 16px rgba(109, 92, 255, 0.32); }
 .preset.active svg { color: #fff; }
+
+/* #revert button — full-width revert/restore toggle, with hover/active/disabled states.
+   popup.js swaps its label between "Revert to 100 %" and "Revert to <X> %". */
+.revert { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin-bottom: 24px; padding: 12px; font-size: 12.5px; font-weight: 600; color: var(--ink); background: linear-gradient(#ffffff, #f8f9fc); border: 1px solid var(--btn-border); border-radius: 13px; box-shadow: var(--shadow-btn); cursor: pointer; transition: transform 0.08s ease, border-color 0.12s ease, box-shadow 0.12s ease; }
+.revert svg { width: 15px; height: 15px; color: var(--muted); }
+.revert:hover:not(:disabled) { border-color: var(--acc-solid); color: var(--acc-ink); box-shadow: 0 6px 14px rgba(40, 38, 60, 0.14); }
+.revert:hover:not(:disabled) svg { color: var(--acc-ink); }
+.revert:active:not(:disabled) { transform: translateY(1px); }
+.revert:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
 
 /* <section class="eq"> — interactive EQ, shown only for a Voice/Bass/custom tone.
    Each band reuses .slider (identical look + behaviour to the volume slider).
