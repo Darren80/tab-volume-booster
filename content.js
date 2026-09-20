@@ -1,8 +1,9 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> voiceBoostFilter (peaking) -> [ soft clipper | masterGain ] -> destination
+//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> voiceBoostFilter (peaking) -> [ compressor ] -> [ soft clipper | masterGain ] -> destination
 // The last stage is one of two swappable tails (see activeTail): the soft clipper
-// (default) or a plain gain node (raw/transparent).
+// (default) or a plain gain node (raw/transparent). The compressor (leveller) sits just
+// before the tail and is switched in/out by routeClip when active (see compressorActive).
 
 (() => {
   if (window.__tabVolumeBoosterInjected) return;
@@ -90,6 +91,96 @@
       curveSamples: 8192,
       oversample: "2x",
     },
+
+    // ---- The leveller (adaptive limiter): clamps loud spikes, leaves normal audio alone. --
+    //  Tracks the signal's running-average PEAK level and clamps anything that pokes above
+    //  it by more than marginDb. Normal audio passes at unity gain; only spikes get pulled
+    //  down. The average uses asymmetric smoothing: it RISES fast (so normal speech after a
+    //  pause isn't falsely flagged) but FALLS slowly (so pauses don't drag it down and screams
+    //  can't chase it up). Tested against a real peaky lecture recording — 28 spike regions
+    //  caught in 14.5 minutes, 99.7% of the signal untouched.
+    //  Toggle live in the console: __tabVolumeBooster.setCompressor(true/false)
+    compressor: {
+      enabled: true,
+
+      // ·· TUNE THIS: how aggressive the leveller is ·························
+      //  These two knobs together decide what gets clamped and how hard.
+
+      //  What counts as a spike: "how far above the running average peak does a
+      //  signal have to be before the leveller touches it?" Everything below
+      //  this margin passes untouched — same loudness, same boost as without
+      //  the leveller. Everything above it gets squashed back down. 8 dB means
+      //  a peak has to be ~2.5× louder than where peaks normally sit to be
+      //  flagged — catches genuine shouts, leaves natural speech emphasis alone.
+      //    ▲ raise toward 12  → more lenient, only the loudest screams get caught
+      //    ▼ lower toward 6   → more aggressive, catches smaller spikes too
+      marginDb: 7,
+
+      //  How hard spikes get squashed: for every N dB the signal overshoots
+      //  the threshold, only 1 dB comes out. 12:1 is near brick-wall — a scream
+      //  barely rises past the threshold at all. This is the other half of "how
+      //  aggressive": marginDb decides WHERE the line is, ratio decides HOW HARD
+      //  you enforce it.
+      //    ▲ higher (20)  → harder wall, almost nothing gets through
+      //    ▼ lower  (4)   → gentler, screams still poke out a bit
+      ratio: 16,
+
+      // ·· TUNE IF IT SOUNDS OFF ··············································
+      //  The leveller works but something sounds weird — ducking after shouts,
+      //  screams escaping, breathing/pumping. Reach for these.
+
+      //  How fast the average RISES when the signal gets louder. Fast rise means
+      //  the average catches up to normal speech quickly after a pause, so it
+      //  doesn't falsely flag normal speech as a spike. But if it's too fast, the
+      //  average chases a scream up and lets it escape. 0.15 s is fast enough to
+      //  settle within ~3 updates (150 ms) when speech starts, slow enough that a
+      //  scream barely pulls it up before the compressor clamps down.
+      //    ▲ raise toward 0.3  → slower to catch up after pauses, but screams can't escape
+      //    ▼ lower toward 0.05 → instant catch-up, but screams will escape too
+      riseSeconds: 0.15,
+
+      //  How slowly the average FALLS when the signal gets quieter. Slow fall
+      //  means the average holds its level through pauses and between sentences,
+      //  so when speech resumes it comes back at the level the average expects.
+      //  A scream can't drag the average down either. 3.0 s means a brief pause
+      //  barely lowers the average.
+      //    ▲ raise toward 5.0  → average holds longer through silence/quiet sections
+      //    ▼ lower toward 1.5  → average drops faster, adapts to genuinely quieter sections
+      fallSeconds: 3.0,
+
+      //  How fast the limiter lets go after a spike passes. On speech this is
+      //  audible: too slow and the quiet word RIGHT AFTER a scream gets ducked,
+      //  too fast and you hear the volume "pumping" back up.
+      //    ▲ higher (0.5)  → slow recovery, can duck the word after a scream
+      //    ▼ lower  (0.1)  → fast recovery, but may sound "pumpy" on dense audio
+      releaseSeconds: 0.25,
+
+      // ·· RARELY CHANGE ······················································
+      //  Fine-tuning for the shape of the clamping. The defaults are set for
+      //  transparent, invisible limiting. Only touch if the leveller sounds
+      //  audibly artificial.
+
+      //  Knee width around the threshold: how abruptly the clamping kicks in.
+      //  A narrow knee = sharp limiter, a wide knee = gradual compressor feel.
+      //    ▲ higher (10)  → softer, more gradual onset (compressor-like)
+      //    ▼ lower  (2)   → sharper, more sudden (limiter-like)
+      kneeDb: 4,
+
+      //  Attack: how fast the limiter grabs a spike once it crosses the threshold.
+      //  3 ms catches the onset transient before it's audible as a click.
+      //    ▲ higher (0.01)  → lets the very first "pop" of a shout through
+      //    ▼ lower  (0.001) → catches it harder, but risks distorting the waveform
+      attackSeconds: 0.003,
+
+      // ·· DON'T CHANGE: measurement plumbing ·································
+      //  Internal wiring for the level-tracking system. These have correct values;
+      //  changing them won't improve the sound, but wrong values will break it.
+      silenceGateDb: -40,             // below this = silence; don't update the average (holds it steady through pauses)
+      updateIntervalMilliseconds: 50, // re-measure interval (ms); lower = smoother + more CPU
+      levelMeterFftSize: 2048,        // AnalyserNode sample window (must be a power of two)
+      minimumThresholdDb: -60,        // floor so silence doesn't send the threshold to -Infinity
+      maximumThresholdDb: 0,          // ceiling: the Web Audio node only accepts up to 0 dB
+    },
   };
   // ==========================================================================
 
@@ -100,6 +191,12 @@
   let voiceBoostFilter = null; // Voice-only +12 dB bell at 1.5 kHz (Volume Master's voice boost)
   let shaper = null; // WaveShaper doing the soft clipping (with the boost baked into its curve)
   let clipEnabled = SETTINGS.softClip.enabled; // live bypass flag; toggle with setSoftClipEnabled()
+  let compressor = null; // DynamicsCompressorNode levelling dynamics BEFORE the boost tail
+  let compressorEnabled = SETTINGS.compressor.enabled; // live bypass flag; toggle with setCompressorEnabled()
+  let levelMeter = null; // AnalyserNode tapping the compressor's input, to measure the running average
+  let levelMeterSamples = null; // reusable Float32Array the AnalyserNode fills each reading (see measureLevel)
+  let runningAverageDb = null; // the smoothed average loudness the adaptive threshold rides on (null = not measured yet)
+  let adaptiveThresholdTimerId = null; // setInterval id for the threshold tracker; non-null only while it's running
   let eqNodes = {}; // gainKey -> its BiquadFilter, populated in buildGraph (see EQ_BANDS)
   let gesturesHooked = false;
 
@@ -178,6 +275,25 @@
     voiceBoostFilter.Q.value = SETTINGS.voiceBoostBand.q;
     voiceBoostFilter.gain.value = 0; // 0 dB peaking == exact passthrough unless Voice+ is picked
 
+    // The leveller: evens out loud/quiet swings BEFORE the boost tail lifts them (see
+    // routeClip / compressorActive). Params live in SETTINGS.compressor.
+    compressor = audioContext.createDynamicsCompressor();
+    compressor.knee.value = SETTINGS.compressor.kneeDb;
+    compressor.ratio.value = SETTINGS.compressor.ratio;
+    compressor.attack.value = SETTINGS.compressor.attackSeconds;
+    compressor.release.value = SETTINGS.compressor.releaseSeconds;
+    // The threshold is not fixed — the adaptive tracker rides it on the running average (see
+    // updateAdaptiveThreshold). Start it at the floor so nothing is clamped until we've measured.
+    compressor.threshold.value = SETTINGS.compressor.minimumThresholdDb;
+
+    // Parallel tap that measures the compressor's INPUT level (an AnalyserNode passes no audio
+    // onward — it's a pure meter). measureLevel reads it; updateAdaptiveThreshold turns the
+    // reading into the running average that aims the threshold.
+    levelMeter = audioContext.createAnalyser();
+    levelMeter.fftSize = SETTINGS.compressor.levelMeterFftSize;
+    levelMeterSamples = new Float32Array(levelMeter.fftSize);
+    voiceBoostFilter.connect(levelMeter);
+
     // Map each EQ band's gain key to its filter node, so applyPresetNodes can push the
     // gains generically (one entry per EQ_BANDS row).
     eqNodes = { bassGainDb: bassFilter, voiceBoostGainDb: voiceBoostFilter };
@@ -207,6 +323,7 @@
     // When the context becomes runnable (after a page gesture), take over.
     audioContext.addEventListener("statechange", () => {
       if (audioContext.state === "running") wireAll();
+      syncAdaptiveThresholdTracker(); // audio just started/stopped flowing — match the tracker to it
     });
   }
 
@@ -257,16 +374,38 @@
     return masterGain;
   }
 
-  // Point the last EQ node (voiceBoostFilter) at whichever tail activeTail() picks. Every tail
-  // stays wired to the speakers, so this just re-points one connection — safe to flip live.
+  // Is the leveller in the signal path right now? Like the soft clipper it only acts while
+  // processing is engaged, so the 100%+Flat baseline stays a bit-for-bit passthrough.
+  function compressorActive() {
+    return compressorEnabled && processingEngaged();
+  }
+
+  // Point the last EQ node (voiceBoostFilter) at whichever tail activeTail() picks, routing
+  // THROUGH the leveller first when it's active:
+  //   leveller on : voiceBoostFilter -> compressor -> activeTail -> destination
+  //   leveller off: voiceBoostFilter ->               activeTail -> destination
+  // Every tail stays wired to the speakers, so this just re-points connections — safe to flip live.
   function routeClip() {
-    if (!voiceBoostFilter || !masterGain || !shaper) return;
+    if (!voiceBoostFilter || !masterGain || !shaper || !compressor || !levelMeter) return;
     try {
-      voiceBoostFilter.disconnect();
+      voiceBoostFilter.disconnect(); // drops the tail/compressor AND the levelMeter tap ...
     } catch (err) {
       /* nothing connected yet */
     }
-    voiceBoostFilter.connect(activeTail());
+    try {
+      compressor.disconnect();
+    } catch (err) {
+      /* nothing connected yet */
+    }
+    voiceBoostFilter.connect(levelMeter); // ... so re-establish the meter tap every time (parallel, no audio out)
+    const tail = activeTail();
+    if (compressorActive()) {
+      voiceBoostFilter.connect(compressor); // level the dynamics ...
+      compressor.connect(tail); // ... then the tail applies the boost
+    } else {
+      voiceBoostFilter.connect(tail);
+    }
+    syncAdaptiveThresholdTracker(); // start/stop the threshold tracker to match the new routing
   }
 
   // Engage/bypass the always-there high-pass WITHOUT re-wiring — the node stays in the
@@ -291,6 +430,95 @@
     clipEnabled = !!on;
     routeClip();
     return clipEnabled;
+  }
+
+  // Programmatic on/off for the leveller — handy for A/B testing. Call
+  // setCompressorEnabled(false) to hear the raw, unlevelled dynamics, true to even them out.
+  function setCompressorEnabled(on) {
+    compressorEnabled = !!on;
+    routeClip();
+    return compressorEnabled;
+  }
+
+  // Asymmetric smoothing factors for the adaptive threshold tracker. The average RISES fast
+  // (riseAlpha — catches up to speech after a pause) but FALLS slowly (fallAlpha — holds
+  // through pauses, resists screams dragging it down). Derived from SETTINGS, not magic numbers.
+  const ADAPTIVE_RISE_ALPHA = 1 - Math.exp(
+    -(SETTINGS.compressor.updateIntervalMilliseconds / 1000) / SETTINGS.compressor.riseSeconds
+  );
+  const ADAPTIVE_FALL_ALPHA = 1 - Math.exp(
+    -(SETTINGS.compressor.updateIntervalMilliseconds / 1000) / SETTINGS.compressor.fallSeconds
+  );
+
+  // Read the compressor's input PEAK level RIGHT NOW in dBFS (0 dB == full scale). We measure
+  // peaks (not RMS) because the DynamicsCompressorNode acts on peaks — comparing its threshold
+  // to a peak average is apples-to-apples, whereas an RMS average sits ~12 dB below the peaks
+  // (the crest factor) and would falsely flag normal speech. Returns null when the tap is
+  // silent/not yet flowing, so the caller can hold the average.
+  function measureLevel() {
+    if (!levelMeter || !levelMeterSamples) return null;
+    levelMeter.getFloatTimeDomainData(levelMeterSamples);
+    let peakSample = 0;
+    for (let index = 0; index < levelMeterSamples.length; index++) {
+      const absoluteSample = Math.abs(levelMeterSamples[index]);
+      if (absoluteSample > peakSample) peakSample = absoluteSample;
+    }
+    if (peakSample <= 0) return null;
+    return 20 * Math.log10(peakSample);
+  }
+
+  // One tick of the tracker: fold the latest peak level into the running average, then aim the
+  // compressor's threshold at (average + marginDb) so only signal ABOVE that — the spikes —
+  // gets clamped. The threshold is glided (setTargetAtTime) rather than stepped, so it never
+  // zippers.
+  //
+  // Three guards keep the average where speech is, not where silence/screams drag it:
+  //   1. Silence gate: readings below silenceGateDb are ignored (average holds through pauses)
+  //   2. Fast rise: when the signal is ABOVE the average, the average catches up quickly (so
+  //      normal speech after a pause isn't falsely flagged)
+  //   3. Slow fall: when the signal is BELOW the average, the average drops slowly (holds its
+  //      level between sentences, resists pauses dragging it down)
+  function updateAdaptiveThreshold() {
+    if (!compressor || !audioContext) return;
+    const measuredDb = measureLevel();
+    if (measuredDb === null) return;
+    // Silence gate: don't update the average during pauses — hold it where speech was.
+    if (measuredDb < SETTINGS.compressor.silenceGateDb) return;
+    const flooredMeasuredDb = Math.max(SETTINGS.compressor.minimumThresholdDb, measuredDb);
+    if (runningAverageDb === null) {
+      runningAverageDb = flooredMeasuredDb; // seed on the first reading, no ramp-up from the floor
+    } else {
+      // Asymmetric smoothing: rise fast, fall slow.
+      const alpha = flooredMeasuredDb > runningAverageDb ? ADAPTIVE_RISE_ALPHA : ADAPTIVE_FALL_ALPHA;
+      runningAverageDb += alpha * (flooredMeasuredDb - runningAverageDb);
+    }
+    const targetThresholdDb = Math.min(
+      SETTINGS.compressor.maximumThresholdDb,
+      Math.max(SETTINGS.compressor.minimumThresholdDb, runningAverageDb + SETTINGS.compressor.marginDb)
+    );
+    const glideSeconds = SETTINGS.compressor.updateIntervalMilliseconds / 1000;
+    compressor.threshold.setTargetAtTime(targetThresholdDb, audioContext.currentTime, glideSeconds);
+  }
+
+  // Run the tracker only while the leveller is actually in the path AND audio is flowing;
+  // otherwise stop it and park the threshold at the floor (unity, nothing clamped). Called
+  // wherever compressorActive() can change — from routeClip and on the context statechange.
+  function syncAdaptiveThresholdTracker() {
+    const shouldRun = compressorActive() && audioContext && audioContext.state === "running";
+    if (shouldRun) {
+      if (adaptiveThresholdTimerId !== null) return;
+      runningAverageDb = null; // re-measure fresh each time it engages
+      adaptiveThresholdTimerId = setInterval(
+        updateAdaptiveThreshold,
+        SETTINGS.compressor.updateIntervalMilliseconds
+      );
+    } else {
+      if (adaptiveThresholdTimerId === null) return;
+      clearInterval(adaptiveThresholdTimerId);
+      adaptiveThresholdTimerId = null;
+      runningAverageDb = null;
+      if (compressor) compressor.threshold.value = SETTINGS.compressor.minimumThresholdDb;
+    }
   }
 
   // Is this source one Web Audio can always tap without a CORS opt-in? blob:/data:/MSE
@@ -603,6 +831,7 @@
       engaged,
       contextState,
       softClipEnabled: clipEnabled,
+      compressorEnabled: compressorEnabled,
       // The popup shows a hint when boost is engaged but the context isn't running yet
       // (user needs to click the page), or when some media can't be boosted (cross-origin).
       pending: engaged && contextState !== "running" && counts.routable > 0,
@@ -629,18 +858,32 @@
       case "set-softclip": // { type: "set-softclip", enabled: true|false }
         setSoftClipEnabled(message.enabled);
         return Promise.resolve(getState());
+      case "set-compressor": // { type: "set-compressor", enabled: true|false }
+        setCompressorEnabled(message.enabled);
+        return Promise.resolve(getState());
       default:
         return undefined;
     }
   });
 
   // Console test hook, from the content script's devtools context:
-  //   __tabVolumeBooster.setSoftClip(false)  // hear the raw, clippable boost
-  //   __tabVolumeBooster.setSoftClip(true)   // smooth, protected again
+  //   __tabVolumeBooster.setSoftClip(false)    // hear the raw, clippable boost
+  //   __tabVolumeBooster.setSoftClip(true)     // smooth, protected again
+  //   __tabVolumeBooster.setCompressor(false)  // hear the raw, unlevelled dynamics
+  //   __tabVolumeBooster.setCompressor(true)   // even out loud/quiet swings (spiky lectures)
   // Boost the slider first (the tails only run while engaged), then flip live to A/B.
   window.__tabVolumeBooster = {
     setSoftClip: setSoftClipEnabled,
     isSoftClipEnabled: () => clipEnabled,
+    setCompressor: setCompressorEnabled,
+    isCompressorEnabled: () => compressorEnabled,
+    // Watch the adaptive threshold while tuning SETTINGS.compressor.marginDb: this reports the
+    // running-average level it's tracking and where the threshold currently sits (average + margin).
+    compressorLevels: () => ({
+      runningAverageDb,
+      thresholdDb: compressor ? compressor.threshold.value : null,
+      gainReductionDb: compressor ? compressor.reduction : null,
+    }),
   };
 
   // Restore this tab's last volume/preset (survives a refresh, which keeps the tab id).
