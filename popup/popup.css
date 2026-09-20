@@ -46,9 +46,9 @@ body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", syst
 .preset.active svg { color: #fff; }
 
 /* <section class="eq"> — interactive EQ, shown only for a Voice/Bass/custom tone.
-   Each band reuses .slider (identical look + behaviour to the volume slider). The
-   top border is the "horizontal bar" that fences off the section; the .rate
-   section's own top border closes it off below. */
+   Each band reuses .slider (identical look + behaviour to the volume slider).
+   Every stacked section (.eq, .tabs, .rate) carries only a top border, so each
+   pair of visible sections is fenced by exactly one line — never a doubled one. */
 .eq { margin-top: 20px; padding: 16px 2px 6px; border-top: 1px solid var(--border); }
 .eq-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .eq-head .section-label { margin-bottom: 0; }
@@ -67,7 +67,10 @@ body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", syst
 .eq-slider::-moz-range-thumb { width: 20px; height: 20px; }
 
 /* <section class="tabs"> — "Now playing" label + single now-playing row */
-.tabs { margin-top: 20px; }
+/* Separated from whatever's above (EQ or presets) by its own top divider, matching
+   the .rate section. Hidden entirely by popup.js when nothing is playing, so it
+   never leaves a stray line + empty gap between the EQ and the rate section. */
+.tabs { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
 .section-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); margin-bottom: 9px; }
 .tabs-list { list-style: none; margin: 0; padding: 0; }
 .tab-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border-radius: 12px; font-size: 12.5px; color: var(--ink); background: var(--tint); }
@@ -75,7 +78,7 @@ body { margin: 0; width: 424px; min-height: 580px; font-family: "Segoe UI", syst
 .tab-item .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* <section class="rate"> — star rating buttons + feedback panel */
-.rate { display: flex; flex-direction: column; align-items: center; gap: 5px; padding-top: 18px; border-top: 1px solid var(--border); }
+.rate { display: flex; flex-direction: column; align-items: center; gap: 5px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
 .rate-label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .stars { display: inline-flex; justify-content: center; gap: 3px; }
 .star { border: none; background: none; padding: 2px; margin: 0; line-height: 0; border-radius: 6px; cursor: pointer; }

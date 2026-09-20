@@ -22,6 +22,7 @@ const readout = document.getElementById("volumeReadout");
 const presetButtons = [...document.querySelectorAll(".preset")];
 const tabsList = document.getElementById("tabsList");
 const nowPlayingLabel = document.getElementById("nowPlayingLabel");
+const tabsSection = tabsList.closest(".tabs"); // whole section, hidden when nothing plays
 const statusHint = document.getElementById("statusHint");
 const stars = document.getElementById("stars");
 const eqPanel = document.getElementById("eqPanel");
@@ -354,11 +355,14 @@ async function renderNowPlaying() {
   });
   tabAudible = !!tab; // remembered so renderHint can spot the "audible but no reachable media" case
   if (!tab) {
-    // this tab is silent — show nothing at all (no label, no row)
+    // this tab is silent — collapse the whole section so its top divider doesn't
+    // leave a stray line + empty gap between the EQ and the rate section
     tabsList.hidden = true;
     nowPlayingLabel.hidden = true;
+    tabsSection.hidden = true;
     return;
   }
+  tabsSection.hidden = false;
 
   const li = document.createElement("li");
   li.className = "tab-item current";
