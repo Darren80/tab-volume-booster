@@ -22,8 +22,12 @@ const SETTINGS = {
   // the slider-wrap is not. Falls back to .slider-wrap, then the slider.
   hitZoneSelector: ".hero",
 
-  // The circular gauge — a second, wheel-only scroll target.
+  // The circular gauge — a second scroll/drag target for volume.
   dialSelector: ".dial",
+
+  // Vertical drag on the dial: how many pixels of drag equal one volume step (STEP
+  // from popup.js, typically 10 %). Lower = more sensitive.
+  dialDragPixelsPerStep: 4,
 };
 // ────────────────────────────────────────────────────────────────────────
 
@@ -142,6 +146,11 @@ function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
       return Math.hypot(offsetX, offsetY) <= radius;
     }
 
+    // Click-and-drag state — declared before the listeners that close over it.
+    let dialDragging = false;
+    let dialDragStartY = 0;
+    let dialDragStartVolume = 0;
+
     dial.addEventListener(
       "wheel",
       (event) => {
@@ -151,12 +160,40 @@ function initSliderHover({ slider, snapVolume, stepVolume, commitVolume }) {
       { passive: false }
     );
 
-    // ns-resize (↕) signals scroll-up/down to change the value — the dial is
-    // wheel-only, so "pointer" (click me) would misdescribe it.
+    // ns-resize (↕) signals drag-up/down to change the value.
     dial.addEventListener("pointermove", (event) => {
-      dial.style.cursor = insideDial(event) ? "ns-resize" : "";
+      if (!dialDragging) dial.style.cursor = insideDial(event) ? "ns-resize" : "";
     });
     dial.addEventListener("pointerleave", () => {
+      if (!dialDragging) dial.style.cursor = "";
+    });
+
+    dial.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !insideDial(event)) return;
+      event.preventDefault();
+      dial.setPointerCapture(event.pointerId);
+      dialDragging = true;
+      dialDragStartY = event.clientY;
+      dialDragStartVolume = Number(slider.value);
+      dial.style.cursor = "grabbing";
+    });
+
+    dial.addEventListener("pointermove", (event) => {
+      if (!dialDragging) return;
+      const deltaPixels = dialDragStartY - event.clientY; // up is positive
+      const deltaSteps = Math.round(deltaPixels / SETTINGS.dialDragPixelsPerStep);
+      const step = Number(slider.step) || 10;
+      commitVolume(snapVolume(dialDragStartVolume + deltaSteps * step));
+    });
+
+    dial.addEventListener("pointerup", (event) => {
+      if (!dialDragging) return;
+      dialDragging = false;
+      dial.style.cursor = insideDial(event) ? "ns-resize" : "";
+    });
+
+    dial.addEventListener("lostpointercapture", () => {
+      dialDragging = false;
       dial.style.cursor = "";
     });
   }

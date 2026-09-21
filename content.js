@@ -86,7 +86,7 @@
     //  clamps its input to ±1, the boost is baked INTO the curve, rebuilt on every slider move.
     softClip: {
       enabled: true,
-      kneeStartDb: -0.3,
+      kneeStartDb: -1, // where the curve starts to bend (dB below ceiling)
       ceilingDb: 0,
       curveSamples: 8192,
       oversample: "2x",
