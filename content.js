@@ -200,6 +200,21 @@
       minimumThresholdDb: -60,        // floor so silence doesn't send the threshold to -Infinity
       maximumThresholdDb: 0,          // ceiling: the Web Audio node only accepts up to 0 dB
     },
+
+    // ---- DRM detection: the ONLY 100%-certain "cannot boost" signal. --------
+    //  A companion MAIN-world script (drm-detector.js) runs before the page and wraps the
+    //  page's Encrypted Media Extensions (EME) setup. The instant the page attaches a DRM
+    //  content key to a media element, the detector postMessages us and we latch drmBlocked.
+    //  That is proof — not a host guess — that the audio is encrypted and unreachable by our
+    //  Web Audio graph (see getState().drmBlocked and the popup's definitive warning). This
+    //  is what makes sites like Spotify, whose audio element is never even in the DOM, report
+    //  honestly instead of silently doing nothing.
+    drm: {
+      // These MUST match DRM_DETECTOR_SETTINGS in drm-detector.js — the two scripts live in
+      // separate JS worlds and can only agree on the protocol by matching literals.
+      detectedMessageTag: "crescendo-drm-detected", // detector -> us: "this tab is DRM-locked"
+      queryMessageTag: "crescendo-drm-query", // us -> detector: "replay if you already detected it"
+    },
   };
   // ==========================================================================
 
@@ -221,6 +236,7 @@
   let debugCrestFactorTickCount = 0; // throttle counter for debug logging
   let eqNodes = {}; // gainKey -> its BiquadFilter, populated in buildGraph (see EQ_BANDS)
   let gesturesHooked = false;
+  let drmBlocked = false; // latched by the DRM detector (see SETTINGS.drm): proof this tab's audio is EME-locked and un-boostable
 
   const wired = new WeakSet(); // elements routed through the graph
   const skipped = new WeakSet(); // elements we left native (CORS upgrade failed / untouchable)
@@ -904,9 +920,13 @@
       // (user needs to click the page), or when some media can't be boosted (cross-origin).
       pending: engaged && contextState !== "running" && counts.routable > 0,
       blockedMedia: counts.blocked,
-      // "tricky" = a known streaming host whose DRM audio we can't route (see TRICKY_HOSTS);
-      // the popup turns this into an orange "out of my hands" warning.
+      // "tricky" = a known streaming host whose DRM audio we PROBABLY can't route (see
+      // TRICKY_HOSTS); the popup turns this into a soft "MAY not work" warning.
       tricky: isTrickyHost(),
+      // "drmBlocked" = PROVEN un-boostable: the DRM detector saw this tab attach an EME
+      // content key to a media element (see SETTINGS.drm). The popup turns this into the
+      // definitive "can't be boosted" warning with the reasons behind an info icon.
+      drmBlocked,
     };
   }
 
@@ -985,6 +1005,24 @@
         }
       })
       .catch(() => reportState());
+  }
+
+  // Listen for the MAIN-world DRM detector (drm-detector.js). Its message is the single
+  // 100%-proof signal that this tab's audio is DRM-locked and can never be routed through
+  // our graph; getState() forwards it so the popup shows the definitive warning. We only
+  // ever latch it true — a tab that once set up DRM stays flagged.
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return; // same-window messages only
+    const data = event.data;
+    if (!data || data.source !== SETTINGS.drm.detectedMessageTag) return;
+    drmBlocked = true;
+  });
+  // The detector runs at document_start; we start listening at document_idle, so a page that
+  // locked its audio before now would have shouted to no one. Ask it to replay any detection.
+  try {
+    window.postMessage({ source: SETTINGS.drm.queryMessageTag }, "*");
+  } catch (err) {
+    /* postMessage unavailable during teardown — best effort */
   }
 
   restoreState();

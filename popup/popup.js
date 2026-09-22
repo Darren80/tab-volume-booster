@@ -39,6 +39,28 @@ const EQ_UI = {
   wheelHitPaddingPixels: 5,
 };
 
+// All status-hint copy lives here (no message strings inline in renderHint). The DRM
+// case is the ONLY definite "cannot be boosted" — it fires solely on state.drmBlocked,
+// which the content script sets from hard proof (an EME key was attached; see
+// SETTINGS.drm in content.js). Everything else stays a "MAY not work" heuristic. The
+// reasons behind the info icon must be things that make boosting 100% impossible — never
+// merely unlikely — so keep this list to proven facts only.
+const STATUS_HINT_SETTINGS = {
+  drmBlockedMessage: "This tab's audio is protected by DRM, so it can't be boosted.",
+  drmBlockedReasonsTitle: "Why it's blocked:",
+  drmBlockedReasons: [
+    "This tab locked its audio with a DRM content key (services like Spotify and Netflix use Widevine), so the decoded sound is kept out of reach of the page's code entirely.",
+    "Firefox forbids sending DRM-protected audio through the Web Audio API — attempting it raises “NotSupportedError” and would silence playback rather than boost it.",
+  ],
+  infoIconLabel: "Why can't this be boosted?",
+  drmMaybeMessage: "This site's audio is protected by DRM — boosting it MAY not work.",
+  embeddedPlayerMessage:
+    "The audio is playing inside an embedded player — boosting it MAY not work.",
+  crossOriginMessage:
+    "Some audio here comes from another site — boosting it MAY not work.",
+  noMediaMessage: "No audio or video found on this page yet.",
+};
+
 // Built EQ sliders, keyed by their gain key (e.g. "bassGainDb") -> { input, output }.
 // Populated by buildEqRows from the content script's band list; the popup never
 // hardcodes which bands exist.
@@ -240,7 +262,45 @@ function renderEq(state) {
   eqTag.classList.toggle("eq-tag--hidden", state.preset !== "custom");
 }
 
+// Build the info icon that sits after a definite warning. Hovering (or focusing) it
+// reveals the proven reasons the audio can't be boosted. Reasons are passed in so the
+// tooltip only ever lists what actually applies to this case.
+function buildInfoIcon(reasons, title) {
+  const info = document.createElement("span");
+  info.className = "info";
+  info.tabIndex = 0; // keyboard-focusable so the tooltip isn't hover-only
+  info.setAttribute("role", "button");
+  info.setAttribute("aria-label", STATUS_HINT_SETTINGS.infoIconLabel);
+
+  const glyph = document.createElement("span");
+  glyph.className = "info-glyph";
+  glyph.textContent = "i"; // CSS renders this as a circled "i"
+  glyph.setAttribute("aria-hidden", "true");
+
+  const pop = document.createElement("span");
+  pop.className = "info-pop";
+  pop.setAttribute("role", "tooltip");
+
+  const heading = document.createElement("strong");
+  heading.className = "info-pop-title";
+  heading.textContent = title;
+  pop.appendChild(heading);
+
+  const list = document.createElement("ul");
+  list.className = "info-pop-list";
+  for (const reason of reasons) {
+    const item = document.createElement("li");
+    item.textContent = reason;
+    list.appendChild(item);
+  }
+  pop.appendChild(list);
+
+  info.append(glyph, pop);
+  return info;
+}
+
 function renderHint(state) {
+  statusHint.textContent = ""; // clear any previous text + info icon
   if (!state) {
     statusHint.hidden = true;
     statusHint.classList.remove("warn");
@@ -249,34 +309,53 @@ function renderHint(state) {
 
   // `warn` messages are the honest "out of my hands" cases — audio this add-on
   // physically can't touch — and render in orange. Everything else is a neutral
-  // (violet) informational nudge.
+  // (violet) informational nudge. `reasons`, when set, is the PROVEN list shown
+  // behind an info icon; only the definite (DRM) case carries it.
   let message = "";
   let warn = false;
+  let reasons = null;
 
-  if (state.tricky) {
-    // DRM/EME stream (Netflix, Disney+, and the like).
+  if (state.drmBlocked) {
+    // PROVEN un-boostable: the content script's DRM detector saw this tab attach an
+    // EME content key to its audio (see SETTINGS.drm in content.js). Definite, so it
+    // gets the plain "can't be boosted" wording plus the reasons behind the info icon.
     warn = true;
-    message =
-      "This site's audio is protected by DRM — boosting it MAY not work.";
+    message = STATUS_HINT_SETTINGS.drmBlockedMessage;
+    reasons = STATUS_HINT_SETTINGS.drmBlockedReasons;
+  } else if (state.tricky) {
+    // A known-DRM host, but we haven't yet SEEN it lock its audio this session (e.g.
+    // nothing has played). Only a heuristic, so it stays a soft "MAY not work".
+    warn = true;
+    message = STATUS_HINT_SETTINGS.drmMaybeMessage;
   } else if (tabAudible && !framesHaveMedia) {
     // Sound is coming from the tab, but NO frame we can reach exposes a media
     // element — the audio lives in a frame we can't inject into (a sandboxed or
     // otherwise privileged embed), so it's genuinely out of reach.
     warn = true;
-    message =
-      "The audio is playing inside an embedded player — boosting it MAY not work.";
+    message = STATUS_HINT_SETTINGS.embeddedPlayerMessage;
   } else if (state.blockedMedia > 0) {
     // Media loaded from another site without CORS: unroutable.
     warn = true;
-    message =
-      "Some audio here comes from another site — boosting it MAY not work.";
+    message = STATUS_HINT_SETTINGS.crossOriginMessage;
   } else if (state.engaged && !state.hasMedia) {
-    message = "No audio or video found on this page yet.";
+    message = STATUS_HINT_SETTINGS.noMediaMessage;
   }
 
-  statusHint.textContent = message;
-  statusHint.hidden = message === "";
-  statusHint.classList.toggle("warn", warn && message !== "");
+  if (message === "") {
+    statusHint.hidden = true;
+    statusHint.classList.remove("warn");
+    return;
+  }
+
+  const text = document.createElement("span");
+  text.className = "status-hint-text";
+  text.textContent = reasons ? message + " " : message;
+  statusHint.appendChild(text);
+  if (reasons && reasons.length) {
+    statusHint.appendChild(buildInfoIcon(reasons, STATUS_HINT_SETTINGS.drmBlockedReasonsTitle));
+  }
+  statusHint.hidden = false;
+  statusHint.classList.toggle("warn", warn);
 }
 
 // --- Messaging with the active tab's content script ---------------------
