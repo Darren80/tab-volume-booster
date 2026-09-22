@@ -218,6 +218,7 @@
   let adaptiveThresholdTimerId = null; // setInterval id for the threshold tracker; non-null only while it's running
   let runningPeakDb = null; // smoothed peak level for crest factor measurement (auto soft-clip)
   let runningRmsDb = null; // smoothed RMS level for crest factor measurement (auto soft-clip)
+  let debugCrestFactorTickCount = 0; // throttle counter for debug logging
   let eqNodes = {}; // gainKey -> its BiquadFilter, populated in buildGraph (see EQ_BANDS)
   let gesturesHooked = false;
 
@@ -543,6 +544,16 @@
         runningRmsDb += CREST_FACTOR_ALPHA * (rmsDb - runningRmsDb);
       }
       const crestFactorDb = runningPeakDb - runningRmsDb;
+      // DEBUG: log crest factor ~1x/sec (every 20 ticks at 50ms interval). Remove after testing.
+      debugCrestFactorTickCount++;
+      const debugLogIntervalTicks = Math.round(1000 / SETTINGS.compressor.updateIntervalMilliseconds);
+      if (debugCrestFactorTickCount % debugLogIntervalTicks === 0) {
+        console.log(
+          `[CF] crest=${crestFactorDb.toFixed(1)} dB | threshold=${SETTINGS.softClip.autoCrestFactorThresholdDb} dB | ` +
+          `peak=${runningPeakDb.toFixed(1)} rms=${runningRmsDb.toFixed(1)} | ` +
+          `softClip=${clipEnabled ? "ON" : "OFF"}`
+        );
+      }
       const shouldSoftClip = crestFactorDb >= SETTINGS.softClip.autoCrestFactorThresholdDb;
       if (shouldSoftClip !== clipEnabled) {
         clipEnabled = shouldSoftClip;
