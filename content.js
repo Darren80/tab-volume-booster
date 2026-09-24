@@ -1,12 +1,9 @@
 // Tab Volume Booster - content script
 // Routes each <video>/<audio> element through a Web Audio graph:
-//   source -> lowCutFilter (highpass) -> bassFilter (lowshelf) -> voiceBoostFilter (peaking) -> [ compressor ] -> [ soft clipper | masterGain ] -> destination
-// The last stage is one of two swappable tails (see activeTail): the soft clipper
-// or a plain gain node (raw/transparent). By default the soft clipper engages
-// automatically when the signal's crest factor (peak − RMS) exceeds 14.4 dB,
-// keeping hard clip for smooth audio and soft clip for spiky audio. The compressor
-// (leveller) sits just before the tail and is switched in/out by routeClip when
-// active (see compressorActive).
+//   source -> lowCutFilter -> bassFilter -> voiceBoostFilter -> [compressor -> makeupCompensation] -> tail -> destination
+// The tail is the soft clipper (shaper) or masterGain (hard clip). Auto mode picks soft clip
+// when the crest factor (peak − RMS) exceeds 14.4 dB. The compressor (leveller) is switched
+// in/out by routeClip.
 
 (() => {
   if (window.__tabVolumeBoosterInjected) return;
@@ -15,254 +12,138 @@
   const api = typeof browser !== "undefined" ? browser : chrome;
 
   // ==========================================================================
-  //  SETTINGS  —  the only place with tunable numbers.
-  //  The code below only references these values (no magic numbers elsewhere).
+  //  SETTINGS — every tunable number lives here.
   //  Edit a value, then reload the add-on in about:debugging to hear the change.
   // ==========================================================================
   const SETTINGS = {
-    // ---- Volume slider range, in percent. 100 = the tab's normal volume. -----
-    //  The single source of truth for the ceiling: the popup asks for maxPercent
-    //  and sizes its slider to match, so you only change the number here.
+    // Volume slider range, in percent. 100 = the tab's normal volume. The popup sizes its
+    // slider from these, so this is the only place to change the range.
     volume: {
-      minPercent: 100, // the floor: this add-on only boosts, never cuts below normal.
-      maxPercent: 1200, // how far the slider goes (1200 = 12x loudness). See §"How high?" in README.
-      defaultPercent: 100, // where a fresh tab starts (no boost)
+      minPercent: 100, // boost-only: never cuts below normal
+      maxPercent: 1200,
+      defaultPercent: 100,
+      // Time constant for gain/EQ changes, so fader moves glide instead of clicking.
+      gainSmoothingSeconds: 0.015,
     },
 
-    // ---- The EQ bands the presets drive. --------------------------------------
-    //  A biquad filter reshapes the sound; these define WHERE each band sits and how
-    //  wide it is, while how hard each preset pushes them is set in `presets`.
-
-    // 1. Hygiene high-pass: removes sub-bass rumble but keeps the voice's body intact —
-    //    the right way to de-rumble (a low-shelf cut would scoop the body and leave a thin
-    //    "telephone" voice). Engages only when processing (see routeLowCut); an exact
-    //    passthrough at the 100%+Flat baseline.
+    // EQ bands. Band placement lives here; how hard each preset pushes them is in `presets`.
+    // High-pass: removes sub-bass rumble but keeps the voice's body (a low-shelf cut would
+    // leave a thin "telephone" voice). On only while an EQ band is lifted.
     lowCutBand: {
-      type: "highpass", // passes everything ABOVE frequencyHz, rolls off below it
-      frequencyHz: 80, // standard broadcast low-cut: kills rumble, keeps fundamentals.
-      //                  Small laptop/earbud speakers can't reproduce sub-80 anyway.
-      q: 0.707, // Butterworth (maximally flat) — no resonant bump at the corner.
+      type: "highpass",
+      frequencyHz: 80,
+      q: 0.707, // Butterworth: no resonant bump at the corner
     },
-    // 2. Bass boost (Bass preset only): a low shelf that adds warmth/boom.
     bassBand: {
-      type: "lowshelf", // lifts EVERYTHING below `frequencyHz`
-      frequencyHz: 120, // in the usable-bass range small speakers can actually reproduce.
+      type: "lowshelf",
+      frequencyHz: 120,
     },
-    // 3. Voice-boost bell (the Voice preset): a straight copy of Volume Master's voice boost —
-    //    ONE broad peaking bell that lifts (not cuts) the vocal midrange.
-    //    Reverse-engineered from Volume Master v1.14.x (offscreen.js): peaking @ 1500 Hz,
-    //    Q 1, +12 dB. (Their store copy says "2.5 kHz + a compressor"; the shipped code is
-    //    a single 1500 Hz bell with no compressor.) This replaced our old clarity-cut Voice
-    //    recipe, which is kept as a comment under the `voice` preset below.
+    // Voice boost: one broad bell, copied from Volume Master v1.14.x (peaking @ 1500 Hz, Q 1).
     voiceBoostBand: {
-      type: "peaking", // a bell centred on `frequencyHz`
-      frequencyHz: 1500, // Volume Master's actual voice-boost centre (broad vocal midrange)
-      q: 1.0, // Volume Master's Q — broad, so it reads as "fuller/louder voice", not a honk
+      type: "peaking",
+      frequencyHz: 1500,
+      q: 1.0,
     },
 
-    // ---- Presets: each sets the bands' gain in DECIBELS. 0 dB = flat. --------
-    //  Rule of thumb: +6 dB ≈ twice as loud for that band, -6 dB ≈ half. The low-cut
-    //  has no gain knob (see routeLowCut), so it isn't listed here.
+    // Band gains per preset, in dB (0 = flat, +6 dB ≈ twice as loud for that band).
     presets: {
-      default: { bassGainDb: 0, voiceBoostGainDb: 0 }, // flat
-      bass: { bassGainDb: 14, voiceBoostGainDb: 0 }, // boomy
+      default: { bassGainDb: 0, voiceBoostGainDb: 0 },
+      bass: { bassGainDb: 14, voiceBoostGainDb: 0 },
       voice: { bassGainDb: 0, voiceBoostGainDb: 12 },
-      //        Volume Master's voice boost, copied 1:1: a single +12 dB bell at 1500 Hz and nothing
-      //        else — a BOOST (louder/fuller), riding through the soft clipper so it won't harsh-clip.
     },
 
-    // ---- EQ faders: the dB range the popup's per-band sliders span. ----------
-    //  Boost-only, like the volume slider — this add-on lifts bands, never cuts them.
-    //  The presets above are just points inside this range that the faders snap to;
-    //  dragging a fader past a preset puts the tone into a "custom" state. Widen the
-    //  range here (e.g. minDb: -12) if you ever want the faders to cut as well as boost.
+    // dB range of the popup's EQ faders (boost-only). Presets are points inside this range;
+    // anything else reads as "custom".
     eq: {
-      minDb: 0, // flat (no lift)
-      maxDb: 18, // headroom above the strongest preset (Bass +14 dB)
-      stepDb: 1, // fader granularity
+      minDb: 0,
+      maxDb: 18,
+      stepDb: 1,
     },
 
-    // ---- The soft clipper: the anti-clipping stage at the end of the chain. --
-    //  When the boost pushes peaks past the digital ceiling (±1.0), instead of chopping
-    //  them square (harsh clipping) we ROUND them off into warm saturation, acting only on
-    //  the top peaks so it doesn't squash dynamics like a compressor. Because a WaveShaper
-    //  clamps its input to ±1, the boost is baked INTO the curve, rebuilt on every slider move.
+    // Soft clipper: rounds off peaks pushed past full scale instead of chopping them square.
+    // A WaveShaper clamps its input to ±1, so the boost is baked into the curve.
     softClip: {
       enabled: true,
       kneeStartDb: -1, // where the curve starts to bend (dB below ceiling)
       ceilingDb: 0,
       curveSamples: 8192,
       oversample: "2x",
-      // ·· AUTO MODE: engage soft clip only when the audio needs it ···········
-      //  Smooth, well-mastered audio sounds punchier hard-clipped; spiky audio
-      //  (lecture onsets, sharp transients) sounds harsh hard-clipped and needs
-      //  the soft clipper. The crest factor (peak − RMS, in dB) measures how
-      //  spiky the signal is: low = smooth/full, high = sharp transients.
-      //  When auto is true the extension measures the running crest factor and
-      //  enables soft clip only when it exceeds the threshold.
-      //  Tested across 10 diverse audio sources (mastered music, TED talks,
-      //  vintage interviews, audiobooks, classroom lectures) — 14.4 dB was the
-      //  crossover where hard clip started sounding worse than soft clip.
+      // Auto mode: soft clip only when the audio is spiky. Crest factor (peak − RMS) above
+      // the threshold = spiky (lectures, sharp transients); below = smooth (mastered music),
+      // which sounds punchier hard-clipped. 14.4 dB was the crossover across 10 test sources.
       auto: true,
       autoCrestFactorThresholdDb: 14.4,
-      //  Smoothing for the running crest factor estimate. Slower = more stable
-      //  (won't flicker between modes on a single loud syllable). 2.0 s means
-      //  the estimate settles after ~4 seconds of signal.
-      autoCrestFactorSmoothingSeconds: 2.0,
+      autoCrestFactorSmoothingSeconds: 2.0, // slower = won't flicker on a single loud syllable
     },
 
-    // ---- The leveller (adaptive limiter): clamps loud spikes, leaves normal audio alone. --
-    //  Tracks the signal's running-average PEAK level and clamps anything that pokes above
-    //  it by more than marginDb. Normal audio passes at unity gain; only spikes get pulled
-    //  down. The average uses asymmetric smoothing: it RISES fast (so normal speech after a
-    //  pause isn't falsely flagged) but FALLS slowly (so pauses don't drag it down and screams
-    //  can't chase it up). Tested against a real peaky lecture recording — 28 spike regions
-    //  caught in 14.5 minutes, 99.7% of the signal untouched.
-    //  Toggle live in the console: __tabVolumeBooster.setCompressor(true/false)
+    // Leveller (adaptive limiter): tracks the running-average peak level and clamps anything
+    // more than marginDb above it. The average rises fast (speech after a pause isn't flagged)
+    // and falls slowly (pauses don't drag it down, screams can't chase it up).
+    // Toggle live in the console: __tabVolumeBooster.setCompressor(true/false)
     compressor: {
       enabled: true,
+      marginDb: 7, // how far above the average peak counts as a spike (▲ 12 lenient, ▼ 6 aggressive)
+      ratio: 16, // how hard spikes are squashed (▲ 20 harder wall, ▼ 4 screams poke out)
+      riseSeconds: 0.15, // ▲ 0.3 screams can't escape but slower after pauses, ▼ 0.05 screams escape
+      fallSeconds: 3.0, // ▲ 5.0 holds longer through quiet sections, ▼ 1.5 adapts faster
+      releaseSeconds: 0.25, // ▲ 0.5 can duck the word after a scream, ▼ 0.1 may pump
+      kneeDb: 4, // ▲ 10 gradual (compressor-like), ▼ 2 sudden (limiter-like)
+      attackSeconds: 0.003, // ▲ 0.01 lets a shout's first pop through, ▼ 0.001 risks distortion
 
-      // ·· TUNE THIS: how aggressive the leveller is ·························
-      //  These two knobs together decide what gets clamped and how hard.
-
-      //  What counts as a spike: "how far above the running average peak does a
-      //  signal have to be before the leveller touches it?" Everything below
-      //  this margin passes untouched — same loudness, same boost as without
-      //  the leveller. Everything above it gets squashed back down. 8 dB means
-      //  a peak has to be ~2.5× louder than where peaks normally sit to be
-      //  flagged — catches genuine shouts, leaves natural speech emphasis alone.
-      //    ▲ raise toward 12  → more lenient, only the loudest screams get caught
-      //    ▼ lower toward 6   → more aggressive, catches smaller spikes too
-      marginDb: 7,
-
-      //  How hard spikes get squashed: for every N dB the signal overshoots
-      //  the threshold, only 1 dB comes out. 12:1 is near brick-wall — a scream
-      //  barely rises past the threshold at all. This is the other half of "how
-      //  aggressive": marginDb decides WHERE the line is, ratio decides HOW HARD
-      //  you enforce it.
-      //    ▲ higher (20)  → harder wall, almost nothing gets through
-      //    ▼ lower  (4)   → gentler, screams still poke out a bit
-      ratio: 16,
-
-      // ·· TUNE IF IT SOUNDS OFF ··············································
-      //  The leveller works but something sounds weird — ducking after shouts,
-      //  screams escaping, breathing/pumping. Reach for these.
-
-      //  How fast the average RISES when the signal gets louder. Fast rise means
-      //  the average catches up to normal speech quickly after a pause, so it
-      //  doesn't falsely flag normal speech as a spike. But if it's too fast, the
-      //  average chases a scream up and lets it escape. 0.15 s is fast enough to
-      //  settle within ~3 updates (150 ms) when speech starts, slow enough that a
-      //  scream barely pulls it up before the compressor clamps down.
-      //    ▲ raise toward 0.3  → slower to catch up after pauses, but screams can't escape
-      //    ▼ lower toward 0.05 → instant catch-up, but screams will escape too
-      riseSeconds: 0.15,
-
-      //  How slowly the average FALLS when the signal gets quieter. Slow fall
-      //  means the average holds its level through pauses and between sentences,
-      //  so when speech resumes it comes back at the level the average expects.
-      //  A scream can't drag the average down either. 3.0 s means a brief pause
-      //  barely lowers the average.
-      //    ▲ raise toward 5.0  → average holds longer through silence/quiet sections
-      //    ▼ lower toward 1.5  → average drops faster, adapts to genuinely quieter sections
-      fallSeconds: 3.0,
-
-      //  How fast the limiter lets go after a spike passes. On speech this is
-      //  audible: too slow and the quiet word RIGHT AFTER a scream gets ducked,
-      //  too fast and you hear the volume "pumping" back up.
-      //    ▲ higher (0.5)  → slow recovery, can duck the word after a scream
-      //    ▼ lower  (0.1)  → fast recovery, but may sound "pumpy" on dense audio
-      releaseSeconds: 0.25,
-
-      // ·· RARELY CHANGE ······················································
-      //  Fine-tuning for the shape of the clamping. The defaults are set for
-      //  transparent, invisible limiting. Only touch if the leveller sounds
-      //  audibly artificial.
-
-      //  Knee width around the threshold: how abruptly the clamping kicks in.
-      //  A narrow knee = sharp limiter, a wide knee = gradual compressor feel.
-      //    ▲ higher (10)  → softer, more gradual onset (compressor-like)
-      //    ▼ lower  (2)   → sharper, more sudden (limiter-like)
-      kneeDb: 4,
-
-      //  Attack: how fast the limiter grabs a spike once it crosses the threshold.
-      //  3 ms catches the onset transient before it's audible as a click.
-      //    ▲ higher (0.01)  → lets the very first "pop" of a shout through
-      //    ▼ lower  (0.001) → catches it harder, but risks distorting the waveform
-      attackSeconds: 0.003,
-
-      // ·· DON'T CHANGE: measurement plumbing ·································
-      //  Internal wiring for the level-tracking system. These have correct values;
-      //  changing them won't improve the sound, but wrong values will break it.
-      silenceGateDb: -40,             // below this = silence; don't update the average (holds it steady through pauses)
-      updateIntervalMilliseconds: 50, // re-measure interval (ms); lower = smoother + more CPU
-      levelMeterFftSize: 2048,        // AnalyserNode sample window (must be a power of two)
-      minimumThresholdDb: -60,        // floor so silence doesn't send the threshold to -Infinity
-      maximumThresholdDb: 0,          // ceiling: the Web Audio node only accepts up to 0 dB
+      // Measurement plumbing — correct as-is.
+      silenceGateDb: -40, // readings below this are silence and don't move the average
+      updateIntervalMilliseconds: 50,
+      levelMeterFftSize: 2048, // must be a power of two
+      minimumThresholdDb: -60,
+      maximumThresholdDb: 0, // the Web Audio node's upper limit; also the "clamp nothing" resting value
     },
 
-    // ---- DRM detection: the ONLY 100%-certain "cannot boost" signal. --------
-    //  A companion MAIN-world script (drm-detector.js) runs before the page and wraps the
-    //  page's Encrypted Media Extensions (EME) setup. The instant the page attaches a DRM
-    //  content key to a media element, the detector postMessages us and we latch drmBlocked.
-    //  That is proof — not a host guess — that the audio is encrypted and unreachable by our
-    //  Web Audio graph (see getState().drmBlocked and the popup's definitive warning). This
-    //  is what makes sites like Spotify, whose audio element is never even in the DOM, report
-    //  honestly instead of silently doing nothing.
+    // DRM detection. These MUST match DRM_DETECTOR_SETTINGS in drm-detector.js.
     drm: {
-      // These MUST match DRM_DETECTOR_SETTINGS in drm-detector.js — the two scripts live in
-      // separate JS worlds and can only agree on the protocol by matching literals.
-      detectedMessageTag: "crescendo-drm-detected", // detector -> us: "this tab is DRM-locked"
-      queryMessageTag: "crescendo-drm-query", // us -> detector: "replay if you already detected it"
+      detectedMessageTag: "crescendo-drm-detected",
+      queryMessageTag: "crescendo-drm-query",
     },
   };
   // ==========================================================================
 
   let audioContext = null;
   let masterGain = null;
-  let lowCutFilter = null; // high-pass: rumble out, body kept — engaged by boost/preset (see routeLowCut)
-  let bassFilter = null; // low shelf, lifted by the Bass preset
-  let voiceBoostFilter = null; // Voice-only +12 dB bell at 1.5 kHz (Volume Master's voice boost)
-  let shaper = null; // WaveShaper doing the soft clipping (with the boost baked into its curve)
-  let clipEnabled = SETTINGS.softClip.enabled; // live bypass flag; toggle with setSoftClipEnabled()
-  let compressor = null; // DynamicsCompressorNode levelling dynamics BEFORE the boost tail
-  let compressorEnabled = SETTINGS.compressor.enabled; // live bypass flag; toggle with setCompressorEnabled()
-  let levelMeter = null; // AnalyserNode tapping the compressor's input, to measure the running average
-  let levelMeterSamples = null; // reusable Float32Array the AnalyserNode fills each reading (see measureLevel)
-  let runningAverageDb = null; // the smoothed average loudness the adaptive threshold rides on (null = not measured yet)
-  let adaptiveThresholdTimerId = null; // setInterval id for the threshold tracker; non-null only while it's running
-  let runningPeakDb = null; // smoothed peak level for crest factor measurement (auto soft-clip)
-  let runningRmsDb = null; // smoothed RMS level for crest factor measurement (auto soft-clip)
-  let debugCrestFactorTickCount = 0; // throttle counter for debug logging
-  let eqNodes = {}; // gainKey -> its BiquadFilter, populated in buildGraph (see EQ_BANDS)
+  let lowCutFilter = null;
+  let bassFilter = null;
+  let voiceBoostFilter = null;
+  let shaper = null; // soft-clip WaveShaper, boost baked into its curve
+  let clipEnabled = SETTINGS.softClip.enabled;
+  let compressor = null;
+  let makeupCompensation = null; // GainNode cancelling the compressor's built-in makeup gain
+  let compressorEnabled = SETTINGS.compressor.enabled;
+  let levelMeter = null; // AnalyserNode tapping the compressor's input
+  let levelMeterSamples = null;
+  let runningAverageDb = null; // null = not measured yet
+  let adaptiveThresholdTimerId = null;
+  let runningPeakDb = null; // for the auto soft-clip crest factor
+  let runningRmsDb = null;
+  let eqNodes = {}; // gainKey -> BiquadFilter
   let gesturesHooked = false;
-  let drmBlocked = false; // latched by the DRM detector (see SETTINGS.drm): proof this tab's audio is EME-locked and un-boostable
+  let drmBlocked = false; // latched once the DRM detector reports an EME key
 
   const wired = new WeakSet(); // elements routed through the graph
-  const skipped = new WeakSet(); // elements we left native (CORS upgrade failed / untouchable)
-  const upgrading = new WeakSet(); // elements mid CORS-upgrade (reloading with crossOrigin set)
-  const observedRoots = new WeakSet(); // document + open shadow roots we watch for new media
+  const skipped = new WeakSet(); // elements left native (CORS upgrade failed / untouchable)
+  const upgrading = new WeakSet(); // elements mid CORS-upgrade
+  const observedRoots = new WeakSet(); // document + open shadow roots being watched
 
-  let currentVolume = SETTINGS.volume.defaultPercent / 100; // gain multiplier: 1.0 == 100%
-  // The per-band EQ gains (in dB) are the single source of truth for the tone. Presets
-  // are just named points in this space; the popup's faders write here directly. The
-  // "current preset" is DERIVED from these gains (presetNameFor): it's a named preset
-  // when the gains match one exactly, else "custom".
+  let currentVolume = SETTINGS.volume.defaultPercent / 100; // 1.0 == 100%
+  // EQ gains (dB) are the source of truth for the tone; the preset name is derived from them.
   let eqGains = { ...SETTINGS.presets.default };
-  let engaged = false; // the user has asked us to take over
+  let engaged = false;
 
-  // The user-adjustable EQ bands the popup shows as sliders, in display order. This is
-  // the ONE list that ties each preset gain key to its filter band and the label the
-  // popup prints — getState ships it to the popup, which builds a slider per entry. To
-  // add / remove / rename / re-tune a fader, edit here (+ the matching `presets` gain
-  // key and, for a brand-new band, its node in buildGraph); nothing else hardcodes a band.
+  // The EQ bands the popup shows as faders, in display order. getState ships this list,
+  // so the popup builds itself from it.
   const EQ_BANDS = [
     { gainKey: "bassGainDb", label: "Bass", frequencyHz: SETTINGS.bassBand.frequencyHz },
     { gainKey: "voiceBoostGainDb", label: "Voice", frequencyHz: SETTINGS.voiceBoostBand.frequencyHz },
   ];
 
-  // Which named preset (if any) do the current EQ gains correspond to? Returns the
-  // preset key when every band matches one exactly, otherwise "custom" (a hand-tuned tone).
+  // The preset whose gains match exactly, else "custom".
   function presetNameFor(gains) {
     for (const [name, preset] of Object.entries(SETTINGS.presets)) {
       if (EQ_BANDS.every((b) => (preset[b.gainKey] || 0) === (gains[b.gainKey] || 0))) {
@@ -273,12 +154,8 @@
   }
   const currentPresetName = () => presetNameFor(eqGains);
 
-  // --- "Tricky" pages: audio we physically can't touch --------------------
-  // Streaming services whose hardware-backed DRM never reaches a WebAudio graph we
-  // can tap, so createMediaElementSource fails or yields silence; the popup turns a
-  // match into an "out of my hands" warning.
-  // We do NOT flag DRM/EME in general — plenty of it (e.g. software Widevine) decodes
-  // to a routable <video>, so flagging all EME would cry wolf; only these hosts get it.
+  // Streaming hosts whose DRM audio we probably can't route; the popup shows a soft warning.
+  // Not all EME (software Widevine often routes fine), so only these hosts.
   const TRICKY_HOSTS =
     /(^|\.)(netflix\.com|disneyplus\.com|hulu\.com|max\.com|hbomax\.com|hbo\.com|primevideo\.com|amazon\.[a-z.]+|spotify\.com|peacocktv\.com|paramountplus\.com|crunchyroll\.com|tv\.apple\.com)$/i;
 
@@ -300,76 +177,134 @@
     lowCutFilter = audioContext.createBiquadFilter();
     lowCutFilter.type = SETTINGS.lowCutBand.type;
     lowCutFilter.frequency.value = SETTINGS.lowCutBand.frequencyHz;
-    lowCutFilter.Q.value = SETTINGS.lowCutBand.q; // initial params; routeLowCut flips it in/out of the path
+    lowCutFilter.Q.value = SETTINGS.lowCutBand.q;
 
     bassFilter = audioContext.createBiquadFilter();
     bassFilter.type = SETTINGS.bassBand.type;
     bassFilter.frequency.value = SETTINGS.bassBand.frequencyHz;
-    bassFilter.gain.value = 0; // preset-driven; set by applyPresetNodes()
+    bassFilter.gain.value = 0;
 
     voiceBoostFilter = audioContext.createBiquadFilter();
     voiceBoostFilter.type = SETTINGS.voiceBoostBand.type;
     voiceBoostFilter.frequency.value = SETTINGS.voiceBoostBand.frequencyHz;
     voiceBoostFilter.Q.value = SETTINGS.voiceBoostBand.q;
-    voiceBoostFilter.gain.value = 0; // 0 dB peaking == exact passthrough unless Voice+ is picked
+    voiceBoostFilter.gain.value = 0;
 
-    // The leveller: evens out loud/quiet swings BEFORE the boost tail lifts them (see
-    // routeClip / compressorActive). Params live in SETTINGS.compressor.
     compressor = audioContext.createDynamicsCompressor();
     compressor.knee.value = SETTINGS.compressor.kneeDb;
     compressor.ratio.value = SETTINGS.compressor.ratio;
     compressor.attack.value = SETTINGS.compressor.attackSeconds;
     compressor.release.value = SETTINGS.compressor.releaseSeconds;
-    // The threshold is not fixed — the adaptive tracker rides it on the running average (see
-    // updateAdaptiveThreshold). Start it at the floor so nothing is clamped until we've measured.
-    compressor.threshold.value = SETTINGS.compressor.minimumThresholdDb;
+    // Start at the top so nothing is clamped until the tracker has measured the audio.
+    // (Starting at the floor squashed everything for the first few hundred ms: the dip.)
+    compressor.threshold.value = SETTINGS.compressor.maximumThresholdDb;
 
-    // Parallel tap that measures the compressor's INPUT level (an AnalyserNode passes no audio
-    // onward — it's a pure meter). measureLevel reads it; updateAdaptiveThreshold turns the
-    // reading into the running average that aims the threshold.
+    makeupCompensation = audioContext.createGain();
+    makeupCompensation.gain.value = compressorMakeupCompensation(SETTINGS.compressor.maximumThresholdDb);
+    compressor.connect(makeupCompensation);
+
     levelMeter = audioContext.createAnalyser();
     levelMeter.fftSize = SETTINGS.compressor.levelMeterFftSize;
     levelMeterSamples = new Float32Array(levelMeter.fftSize);
     voiceBoostFilter.connect(levelMeter);
 
-    // Map each EQ band's gain key to its filter node, so applyPresetNodes can push the
-    // gains generically (one entry per EQ_BANDS row).
     eqNodes = { bassGainDb: bassFilter, voiceBoostGainDb: voiceBoostFilter };
 
-    // TWO possible tails, both wired to the speakers; the LAST EQ node (voiceBoostFilter)
-    // feeds exactly one (see routeClip / activeTail), so switching is instant.
-    //  SOFT-CLIP : voiceBoostFilter -> shaper -> destination      (default when boosting; boost baked into the curve)
-    //  RAW/BASE  : voiceBoostFilter -> masterGain -> destination  (transparent at 100%, raw clippable boost above)
+    // Two tails, both wired to the speakers; routeClip feeds exactly one.
+    //  SOFT-CLIP : -> shaper -> destination      (boost baked into the curve)
+    //  RAW/BASE  : -> masterGain -> destination  (transparent at 100%, raw clippable boost above)
     masterGain = audioContext.createGain();
     masterGain.gain.value = currentVolume;
 
     shaper = audioContext.createWaveShaper();
     shaper.oversample = SETTINGS.softClip.oversample;
-    updateShaperCurve(); // bakes the current volume + the soft-clip shape into the curve
+    updateShaperCurve();
 
-    // EQ chain (frequency order): lowCut -> bass -> voiceBoost -> tail.
-    // Biquads in series are commutative in magnitude, so the order is just for readability.
     lowCutFilter.connect(bassFilter);
-    bassFilter.connect(voiceBoostFilter); // voiceBoostFilter is the last EQ node (feeds the tail)
-    masterGain.connect(audioContext.destination); // RAW/BASE tail — always wired, fed only when active
-    shaper.connect(audioContext.destination); //     SOFT-CLIP tail — always wired, fed only when active
-    routeClip(); // point voiceBoostFilter at whichever tail is active
-    routeLowCut(); // high-pass on only when boosting/preset; exact passthrough at baseline
+    bassFilter.connect(voiceBoostFilter);
+    masterGain.connect(audioContext.destination);
+    shaper.connect(audioContext.destination);
+    routeClip();
+    routeLowCut();
 
     applyPresetNodes();
 
     // When the context becomes runnable (after a page gesture), take over.
     audioContext.addEventListener("statechange", () => {
       if (audioContext.state === "running") wireAll();
-      syncAdaptiveThresholdTracker(); // audio just started/stopped flowing — match the tracker to it
+      syncAdaptiveThresholdTracker();
     });
   }
 
   const dbToLinear = (db) => Math.pow(10, db / 20);
+  const linearToDb = (linear) => 20 * Math.log10(linear);
 
-  // The soft-clip transfer function. The already-boosted sample `u` passes straight
-  // through below the knee and eases smoothly toward `ceiling` above it, never crossing it.
-  //   |u| <= knee : pass through;  |u| > knee : knee + (ceiling-knee) * tanh((|u|-knee)/(ceiling-knee))
+  // Glide an AudioParam to a new value instead of stepping it (a step clicks).
+  function glideParameter(parameter, value) {
+    parameter.setTargetAtTime(value, audioContext.currentTime, SETTINGS.volume.gainSmoothingSeconds);
+  }
+
+  // Constants of the browser's DynamicsCompressorNode curve (Firefox's
+  // dom/media/webaudio/blink/DynamicsCompressorKernel.cpp). Not tunable — they must match
+  // the browser for compressorMakeupGain to cancel its makeup gain exactly.
+  const BROWSER_COMPRESSOR_CURVE = {
+    slopeProbeFactor: 1.001,
+    kneeSharpnessMinimum: 0.1,
+    kneeSharpnessMaximum: 10000,
+    kneeSharpnessInitial: 5,
+    kneeSharpnessSearchIterations: 15,
+    makeupGainExponent: 0.6,
+  };
+
+  // DynamicsCompressorNode applies automatic makeup gain that can't be turned off, and it
+  // grows as the threshold drops (≈ +7 dB at a −13 dB threshold). Since the adaptive tracker
+  // moves the threshold constantly, that gain would make the leveller boost and pump on its
+  // own. This mirrors the browser's curve to compute the exact makeup gain for a threshold.
+  function compressorMakeupGain(thresholdDb) {
+    const { kneeDb, ratio } = SETTINGS.compressor;
+    const linearThreshold = dbToLinear(thresholdDb);
+    const kneeEndDb = thresholdDb + kneeDb;
+    const kneeEnd = dbToLinear(kneeEndDb);
+    const slope = 1 / ratio;
+
+    const kneeCurve = (input, kneeSharpness) => {
+      if (input < linearThreshold) return input;
+      return linearThreshold + (1 - Math.exp(-kneeSharpness * (input - linearThreshold))) / kneeSharpness;
+    };
+    const slopeAt = (input, kneeSharpness) => {
+      if (input < linearThreshold) return 1;
+      const probedInput = input * BROWSER_COMPRESSOR_CURVE.slopeProbeFactor;
+      const outputDbDelta =
+        linearToDb(kneeCurve(probedInput, kneeSharpness)) - linearToDb(kneeCurve(input, kneeSharpness));
+      return outputDbDelta / (linearToDb(probedInput) - linearToDb(input));
+    };
+
+    // Find the knee sharpness whose slope at the knee's end matches 1/ratio.
+    let minimumSharpness = BROWSER_COMPRESSOR_CURVE.kneeSharpnessMinimum;
+    let maximumSharpness = BROWSER_COMPRESSOR_CURVE.kneeSharpnessMaximum;
+    let kneeSharpness = BROWSER_COMPRESSOR_CURVE.kneeSharpnessInitial;
+    for (let iteration = 0; iteration < BROWSER_COMPRESSOR_CURVE.kneeSharpnessSearchIterations; iteration++) {
+      if (slopeAt(kneeEnd, kneeSharpness) < slope) maximumSharpness = kneeSharpness;
+      else minimumSharpness = kneeSharpness;
+      kneeSharpness = Math.sqrt(minimumSharpness * maximumSharpness);
+    }
+
+    // The curve's output for a full-scale input.
+    let fullRangeGain;
+    if (1 < kneeEnd) {
+      fullRangeGain = kneeCurve(1, kneeSharpness);
+    } else {
+      const kneeEndOutputDb = linearToDb(kneeCurve(kneeEnd, kneeSharpness));
+      fullRangeGain = dbToLinear(kneeEndOutputDb + slope * (0 - kneeEndDb));
+    }
+    return Math.pow(1 / fullRangeGain, BROWSER_COMPRESSOR_CURVE.makeupGainExponent);
+  }
+
+  function compressorMakeupCompensation(thresholdDb) {
+    return 1 / compressorMakeupGain(thresholdDb);
+  }
+
+  // |u| <= knee passes through; above it, eases toward `ceiling` without crossing it.
   function softClipSample(u, knee, ceiling) {
     const mag = Math.abs(u);
     if (mag <= knee) return u;
@@ -377,93 +312,81 @@
     return sign * (knee + (ceiling - knee) * Math.tanh((mag - knee) / (ceiling - knee)));
   }
 
-  // Rebuild the WaveShaper's lookup curve for the CURRENT volume, baking the boost in
-  // (curve[x] = softClip(volume * x)) since the shaper clamps its own input to ±1.
-  // Called on startup and on every volume change.
+  // curve[x] = softClip(volume * x). Rebuilt on every volume change.
   function updateShaperCurve() {
     if (!shaper) return;
     const n = SETTINGS.softClip.curveSamples;
     const knee = dbToLinear(SETTINGS.softClip.kneeStartDb);
     const ceiling = dbToLinear(SETTINGS.softClip.ceilingDb);
-    const drive = currentVolume; // the slider's multiplier, applied inside the curve
+    const drive = currentVolume;
     const curve = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * 2 - 1; // map table index -> input sample in [-1, 1]
+      const x = (i / (n - 1)) * 2 - 1; // table index -> input sample in [-1, 1]
       curve[i] = softClipSample(drive * x, knee, ceiling);
     }
     shaper.curve = curve;
   }
 
-  // The ONE definition of "the user has asked us to alter the sound": a boost past 100%
-  // OR any EQ band lifted off 0 dB. The soft clipper and high-pass key off this together;
-  // when it's false (100% + every band flat) the chain collapses to a bit-for-bit passthrough.
-  function processingEngaged() {
-    return currentVolume > 1 || EQ_BANDS.some((b) => (eqGains[b.gainKey] || 0) !== 0);
+  function eqEngaged() {
+    return EQ_BANDS.some((b) => (eqGains[b.gainKey] || 0) !== 0);
   }
 
-  // Which tail should the last EQ node feed right now? One place decides:
-  //  - Baseline (100% + Flat): masterGain at 1.0 — a bit-transparent passthrough, routing around
-  //    the shaper (which would colour peaks).
-  //  - Engaged: the shaper if soft-clip is on (the default when boosting), else masterGain
-  //    (the raw, freely-clippable boost, A/B).
+  // "The user has asked us to alter the sound": a boost past 100% or any EQ band lifted.
+  // When false, the chain is a bit-for-bit passthrough.
+  function processingEngaged() {
+    return currentVolume > 1 || eqEngaged();
+  }
+
+  // Baseline uses masterGain at 1.0 (transparent); when engaged, the shaper if soft clip is on.
   function activeTail() {
     if (!processingEngaged()) return masterGain;
     if (clipEnabled) return shaper;
     return masterGain;
   }
 
-  // Is the leveller in the signal path right now? Like the soft clipper it only acts while
-  // processing is engaged, so the 100%+Flat baseline stays a bit-for-bit passthrough.
   function compressorActive() {
     return compressorEnabled && processingEngaged();
   }
 
-  // Point the last EQ node (voiceBoostFilter) at whichever tail activeTail() picks, routing
-  // THROUGH the leveller first when it's active:
-  //   leveller on : voiceBoostFilter -> compressor -> activeTail -> destination
-  //   leveller off: voiceBoostFilter ->               activeTail -> destination
-  // Every tail stays wired to the speakers, so this just re-points connections — safe to flip live.
+  // Point the last EQ node at the active tail, through the leveller when it's active.
   function routeClip() {
-    if (!voiceBoostFilter || !masterGain || !shaper || !compressor || !levelMeter) return;
+    if (!voiceBoostFilter || !masterGain || !shaper || !compressor || !makeupCompensation || !levelMeter) return;
     try {
-      voiceBoostFilter.disconnect(); // drops the tail/compressor AND the levelMeter tap ...
+      voiceBoostFilter.disconnect(); // also drops the levelMeter tap
     } catch (err) {
       /* nothing connected yet */
     }
     try {
-      compressor.disconnect();
+      makeupCompensation.disconnect();
     } catch (err) {
       /* nothing connected yet */
     }
-    voiceBoostFilter.connect(levelMeter); // ... so re-establish the meter tap every time (parallel, no audio out)
+    voiceBoostFilter.connect(levelMeter);
     const tail = activeTail();
     if (compressorActive()) {
-      voiceBoostFilter.connect(compressor); // level the dynamics ...
-      compressor.connect(tail); // ... then the tail applies the boost
+      voiceBoostFilter.connect(compressor);
+      makeupCompensation.connect(tail);
     } else {
       voiceBoostFilter.connect(tail);
     }
-    syncAdaptiveThresholdTracker(); // start/stop the threshold tracker to match the new routing
+    syncAdaptiveThresholdTracker();
   }
 
-  // Engage/bypass the always-there high-pass WITHOUT re-wiring — the node stays in the
-  // chain and we just change its params (safe to flip live). When engaged it's a real 80 Hz
-  // high-pass; at the 100%+Flat baseline it becomes a 0 dB "peaking" filter, a mathematically
-  // exact identity (H(z) = 1 everywhere) so the signal passes bit-for-bit.
+  // The high-pass is part of the EQ, so it's only on while a band is lifted. At other times
+  // it becomes a 0 dB peaking filter, an exact identity. A plain volume boost leaves the bass alone.
   function routeLowCut() {
     if (!lowCutFilter) return;
-    if (processingEngaged()) {
-      lowCutFilter.type = SETTINGS.lowCutBand.type; // "highpass"
+    if (eqEngaged()) {
+      lowCutFilter.type = SETTINGS.lowCutBand.type;
       lowCutFilter.frequency.value = SETTINGS.lowCutBand.frequencyHz;
       lowCutFilter.Q.value = SETTINGS.lowCutBand.q;
     } else {
-      lowCutFilter.type = "peaking"; // 0 dB peaking == exact passthrough
+      lowCutFilter.type = "peaking";
       lowCutFilter.gain.value = 0;
     }
   }
 
-  // Programmatic on/off for the soft clipper. An explicit toggle disables auto
-  // mode so the user's choice sticks (otherwise the tracker overrides it in 50ms).
+  // An explicit toggle turns auto mode off so the user's choice sticks.
   function setSoftClipEnabled(on) {
     SETTINGS.softClip.auto = false;
     clipEnabled = !!on;
@@ -471,17 +394,12 @@
     return clipEnabled;
   }
 
-  // Programmatic on/off for the leveller — handy for A/B testing. Call
-  // setCompressorEnabled(false) to hear the raw, unlevelled dynamics, true to even them out.
   function setCompressorEnabled(on) {
     compressorEnabled = !!on;
     routeClip();
     return compressorEnabled;
   }
 
-  // Asymmetric smoothing factors for the adaptive threshold tracker. The average RISES fast
-  // (riseAlpha — catches up to speech after a pause) but FALLS slowly (fallAlpha — holds
-  // through pauses, resists screams dragging it down). Derived from SETTINGS, not magic numbers.
   const ADAPTIVE_RISE_ALPHA = 1 - Math.exp(
     -(SETTINGS.compressor.updateIntervalMilliseconds / 1000) / SETTINGS.compressor.riseSeconds
   );
@@ -492,10 +410,7 @@
     -(SETTINGS.compressor.updateIntervalMilliseconds / 1000) / SETTINGS.softClip.autoCrestFactorSmoothingSeconds
   );
 
-  // Read the compressor's input level RIGHT NOW in dBFS (0 dB == full scale). Returns both
-  // peak and RMS: the compressor uses the peak for its adaptive threshold, and the auto
-  // soft-clip uses the gap between them (the crest factor) to decide whether the signal is
-  // spiky enough to need soft clipping. Returns null when the tap is silent/not yet flowing.
+  // Peak and RMS of the compressor's input in dBFS, or null when silent.
   function measureLevel() {
     if (!levelMeter || !levelMeterSamples) return null;
     levelMeter.getFloatTimeDomainData(levelMeterSamples);
@@ -513,26 +428,15 @@
     return { peakDb, rmsDb };
   }
 
-  // One tick of the tracker: fold the latest peak level into the running average, then aim the
-  // compressor's threshold at (average + marginDb) so only signal ABOVE that — the spikes —
-  // gets clamped. The threshold is glided (setTargetAtTime) rather than stepped, so it never
-  // zippers.
-  //
-  // Three guards keep the average where speech is, not where silence/screams drag it:
-  //   1. Silence gate: readings below silenceGateDb are ignored (average holds through pauses)
-  //   2. Fast rise: when the signal is ABOVE the average, the average catches up quickly (so
-  //      normal speech after a pause isn't falsely flagged)
-  //   3. Slow fall: when the signal is BELOW the average, the average drops slowly (holds its
-  //      level between sentences, resists pauses dragging it down)
+  // One tracker tick: fold the latest reading into the running averages, aim the compressor
+  // threshold at (average peak + marginDb), and let auto soft-clip pick the tail.
   function updateAdaptiveThreshold() {
     if (!audioContext) return;
     const measurement = measureLevel();
     if (measurement === null) return;
     const { peakDb, rmsDb } = measurement;
-    // Silence gate: don't update the average during pauses — hold it where speech was.
-    if (peakDb < SETTINGS.compressor.silenceGateDb) return;
+    if (peakDb < SETTINGS.compressor.silenceGateDb) return; // hold the averages through pauses
 
-    // Leveller: fold the peak into the running average and aim the compressor threshold.
     if (compressor && compressorActive()) {
       const flooredMeasuredDb = Math.max(SETTINGS.compressor.minimumThresholdDb, peakDb);
       if (runningAverageDb === null) {
@@ -545,12 +449,16 @@
         SETTINGS.compressor.maximumThresholdDb,
         Math.max(SETTINGS.compressor.minimumThresholdDb, runningAverageDb + SETTINGS.compressor.marginDb)
       );
+      // Glide the threshold and its makeup compensation together so loudness stays put.
       const glideSeconds = SETTINGS.compressor.updateIntervalMilliseconds / 1000;
       compressor.threshold.setTargetAtTime(targetThresholdDb, audioContext.currentTime, glideSeconds);
+      makeupCompensation.gain.setTargetAtTime(
+        compressorMakeupCompensation(targetThresholdDb),
+        audioContext.currentTime,
+        glideSeconds
+      );
     }
 
-    // Auto soft-clip: track the running crest factor (peak − RMS) and enable/disable
-    // soft clipping based on whether the signal is spiky enough to need it.
     if (SETTINGS.softClip.auto) {
       if (runningPeakDb === null || runningRmsDb === null) {
         runningPeakDb = peakDb;
@@ -560,16 +468,6 @@
         runningRmsDb += CREST_FACTOR_ALPHA * (rmsDb - runningRmsDb);
       }
       const crestFactorDb = runningPeakDb - runningRmsDb;
-      // DEBUG: log crest factor ~1x/sec (every 20 ticks at 50ms interval). Remove after testing.
-      debugCrestFactorTickCount++;
-      const debugLogIntervalTicks = Math.round(1000 / SETTINGS.compressor.updateIntervalMilliseconds);
-      if (debugCrestFactorTickCount % debugLogIntervalTicks === 0) {
-        console.log(
-          `[CF] crest=${crestFactorDb.toFixed(1)} dB | threshold=${SETTINGS.softClip.autoCrestFactorThresholdDb} dB | ` +
-          `peak=${runningPeakDb.toFixed(1)} rms=${runningRmsDb.toFixed(1)} | ` +
-          `softClip=${clipEnabled ? "ON" : "OFF"}`
-        );
-      }
       const shouldSoftClip = crestFactorDb >= SETTINGS.softClip.autoCrestFactorThresholdDb;
       if (shouldSoftClip !== clipEnabled) {
         clipEnabled = shouldSoftClip;
@@ -578,9 +476,8 @@
     }
   }
 
-  // Run the tracker while the leveller OR auto soft-clip needs measurement AND audio is
-  // flowing; otherwise stop it and park the threshold at the floor (unity, nothing clamped).
-  // Called wherever compressorActive() can change — from routeClip and on the context statechange.
+  // Run the tracker only while the leveller or auto soft-clip needs it and audio is flowing.
+  // When it stops, the compressor goes back to clamping nothing.
   function syncAdaptiveThresholdTracker() {
     const needsTracking = compressorActive() || (SETTINGS.softClip.auto && processingEngaged());
     const shouldRun = needsTracking && audioContext && audioContext.state === "running";
@@ -600,12 +497,20 @@
       runningAverageDb = null;
       runningPeakDb = null;
       runningRmsDb = null;
-      if (compressor) compressor.threshold.value = SETTINGS.compressor.minimumThresholdDb;
+      if (compressor && makeupCompensation) {
+        const now = audioContext.currentTime;
+        compressor.threshold.cancelScheduledValues(now);
+        compressor.threshold.setValueAtTime(SETTINGS.compressor.maximumThresholdDb, now);
+        makeupCompensation.gain.cancelScheduledValues(now);
+        makeupCompensation.gain.setValueAtTime(
+          compressorMakeupCompensation(SETTINGS.compressor.maximumThresholdDb),
+          now
+        );
+      }
     }
   }
 
-  // Is this source one Web Audio can always tap without a CORS opt-in? blob:/data:/MSE
-  // and same-origin media are never tainted; an empty src (nothing loaded yet) counts too.
+  // blob:/data:/MSE and same-origin media are never tainted; an empty src counts too.
   function isSameOriginish(src) {
     if (!src) return true;
     if (src.startsWith("blob:") || src.startsWith("data:") || src.startsWith("mediasource:")) {
@@ -618,38 +523,29 @@
     }
   }
 
-  // Can this element's audio survive createMediaElementSource without being silenced *as-is*?
-  // Same-originish always; a cross-origin element only if it already opted into CORS. When this
-  // is false we no longer give up — corsUpgrade() reloads it CORS-enabled (see wireElement).
+  // Can this element be tapped as-is without Web Audio silencing it?
   function isRoutable(element) {
     const src = element.currentSrc || element.src || "";
     if (isSameOriginish(src)) return true;
     return element.crossOrigin === "anonymous" || element.crossOrigin === "use-credentials";
   }
 
-  // Route an element into the graph. Only call this once we expect its audio to be
-  // exposable (same-originish, or a CORS-clean cross-origin load) — a tap can't be undone,
-  // so tapping a tainted element would silence it permanently.
+  // A tap can't be undone, and tapping a tainted element silences it permanently, so only
+  // call this for elements whose audio is exposable. The element's own volume is left alone:
+  // it still applies inside the graph, so the page's volume setting multiplies with the boost.
   function tapElement(element) {
     if (wired.has(element)) return;
     try {
       const source = audioContext.createMediaElementSource(element);
       source.connect(lowCutFilter);
-      element.volume = 1; // volume is now controlled by the gain node
       wired.add(element);
     } catch (err) {
-      // Already routed, or an element we can't touch; leave it alone.
       skipped.add(element);
     }
   }
 
-  // Make a cross-origin (or not-yet-loaded) element tappable by requesting its media WITH
-  // CORS. Setting crossOrigin + reloading forces the (current or next) fetch to go out
-  // CORS-enabled; if the server allows it the load succeeds and we tap it, if it refuses the
-  // element fires `error` and we roll the attribute back so it keeps playing natively.
-  //
-  // We wait for `loadeddata` before tapping (never tap on a still-tainted element), and for an
-  // element with no src yet we just arm the listeners and wait for the page to load something.
+  // Make a cross-origin element tappable by reloading it with CORS. If the server allows it
+  // we tap on `loadeddata`; if not, roll the attribute back so it keeps playing natively.
   function corsUpgrade(element) {
     if (upgrading.has(element)) return;
     upgrading.add(element);
@@ -666,13 +562,11 @@
     const onOk = () => {
       cleanup();
       upgrading.delete(element);
-      tapElement(element); // CORS-clean now — route it through the graph
+      tapElement(element);
     };
     const onFail = () => {
       cleanup();
       upgrading.delete(element);
-      // Server didn't allow CORS: undo the opt-in so the element loads (and plays) natively
-      // again — unboosted, but audible.
       skipped.add(element);
       if (!hadCrossOrigin) element.removeAttribute("crossorigin");
       try {
@@ -688,8 +582,7 @@
     element.addEventListener("error", onFail, { once: true });
 
     element.crossOrigin = "anonymous";
-    // Reload so the current fetch re-runs CORS-enabled. With no src loaded yet, skip the
-    // reload and let the armed listeners fire once the page sets one.
+    // With no src loaded yet, skip the reload and let the listeners fire once the page sets one.
     if (src) {
       try {
         element.load();
@@ -707,46 +600,31 @@
 
   function wireElement(element) {
     if (wired.has(element) || skipped.has(element) || upgrading.has(element)) return;
-    // The baseline (100% + Flat) must be truly native — routing an element through the
-    // graph is itself audible, so don't route until the user asks for something. Not marked
-    // skipped, so it stays a candidate wireAll picks up the moment we engage.
+    // Routing is itself audible, so the baseline stays native until the user asks for something.
     if (!processingEngaged()) return;
 
     const src = element.currentSrc || element.src || "";
-    // Something is loaded AND it's tappable as-is (same-originish, or already CORS): route now.
     if (src && isRoutable(element)) {
       tapElement(element);
       return;
     }
-    // Otherwise it's cross-origin without a CORS opt-in, or nothing is loaded yet (its future
-    // src is unknown). Reload it CORS-enabled and tap on success; corsUpgrade rolls back to
-    // native if the server refuses CORS. This is what makes players that swap in a cross-origin
-    // src — e.g. a bare <audio> pointed at a CDN — boostable instead of silently skipped.
     corsUpgrade(element);
   }
 
-  // Walk `node` and everything beneath it, CROSSING INTO open shadow roots. The plain
-  // querySelectorAll/MutationObserver pair only sees the light DOM, so a player that
-  // mounts its <video> inside a web component's shadow root — e.g. BBC's Standard Media
-  // Player — is invisible to it and never gets boosted. onMedia fires for each
-  // <video>/<audio>; onRoot fires for the document and each shadow root, so callers can
-  // observe each for elements added later. Closed shadow roots are unreachable
-  // (element.shadowRoot is null) and simply stay native, exactly as before.
+  // Walk `node` and its subtree, crossing into open shadow roots (e.g. BBC's player mounts
+  // its <video> in one). onMedia fires per <video>/<audio>; onRoot per document/shadow root.
   function walk(node, onMedia, onRoot) {
     if (node instanceof Element) {
       if (node.tagName === "VIDEO" || node.tagName === "AUDIO") onMedia?.(node);
-      if (node.shadowRoot) walk(node.shadowRoot, onMedia, onRoot); // dive into the shadow tree too
+      if (node.shadowRoot) walk(node.shadowRoot, onMedia, onRoot);
     } else if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE || node.nodeType === Node.DOCUMENT_NODE) {
-      onRoot?.(node); // a shadow root, or the document itself
+      onRoot?.(node);
     }
-    const kids = node.children; // light-DOM children (undefined for text/comment nodes)
+    const kids = node.children;
     if (kids) for (const child of kids) walk(child, onMedia, onRoot);
   }
 
-  // Watch one root (the document or a shadow root) for media added later, pulling any
-  // shadow roots a newly-added subtree brings into the watch set as well. A subtree
-  // MutationObserver can't see across a shadow boundary, so each shadow root needs its
-  // own observer. Each root is observed once (observedRoots), so this stays idempotent.
+  // A MutationObserver can't see across a shadow boundary, so each root gets its own.
   function observeRoot(root) {
     if (observedRoots.has(root)) return;
     observedRoots.add(root);
@@ -758,14 +636,10 @@
     obs.observe(root, { childList: true, subtree: true });
   }
 
-  // Only ever called while the context is running.
   function wireAll() {
     if (!audioContext || audioContext.state !== "running") return;
-    if (!processingEngaged()) return; // baseline: leave every element native (see wireElement)
-    // Wire every media element (light DOM AND open shadow roots) and watch each root
-    // for more that appear later.
+    if (!processingEngaged()) return;
     walk(document, wireElement, observeRoot);
-    masterGain.gain.value = currentVolume;
   }
 
   // Resume the context from real page gestures (the only thing Firefox accepts).
@@ -780,40 +654,30 @@
     ["pointerdown", "keydown", "touchstart"].forEach((type) =>
       window.addEventListener(type, resume, { capture: true, passive: true })
     );
-    // Playback starting is itself a gesture-driven event on most sites.
     document.addEventListener("play", resume, { capture: true, passive: true });
   }
 
-  // Push the current EQ gains onto the filter nodes (the one place that touches them).
-  // Data-driven from EQ_BANDS -> eqNodes, so it needs no edits when a band is added.
   function applyPresetNodes() {
     for (const band of EQ_BANDS) {
       const node = eqNodes[band.gainKey];
-      if (node) node.gain.value = eqGains[band.gainKey] || 0;
+      if (node) glideParameter(node.gain, eqGains[band.gainKey] || 0);
     }
   }
 
-  // Clamp an EQ gain to the fader range so a stray/hand-crafted message can't push a
-  // band outside what the popup can represent.
   const clampEqDb = (db) =>
     Math.min(SETTINGS.eq.maxDb, Math.max(SETTINGS.eq.minDb, Number(db) || 0));
 
-  // Bring the graph up, hook gestures, and take over if we already can — never routing into
-  // a suspended context. At the 100%+Flat baseline we build nothing until a graph already
-  // exists (building an AudioContext and routing media is itself audible), so a tab the user
-  // never boosted stays 100% native; we only build + route once they ask for a boost or preset.
+  // Build the graph and take over if we can. A tab never boosted builds nothing, so it stays native.
   function engage() {
     if (!processingEngaged() && !audioContext) return;
     buildGraph();
     hookGestures();
-    audioContext.resume().catch(() => {}); // fire-and-forget; may be a no-op until a gesture
+    audioContext.resume().catch(() => {});
     engaged = true;
     if (audioContext.state === "running") wireAll();
   }
 
-  // Tell the background page our current volume + preset + EQ gains — it stamps the
-  // toolbar badge and remembers this tab's setting across a refresh. The EQ gains ride
-  // along so a hand-tuned ("custom") tone survives a reload too. Fire-and-forget.
+  // Tell the background page our state, for the badge and to restore it after a refresh.
   function reportState() {
     try {
       api.runtime
@@ -825,37 +689,31 @@
         })
         ?.catch(() => {});
     } catch (err) {
-      /* messaging unavailable (e.g. during teardown) — ignore */
+      /* messaging unavailable (e.g. during teardown) */
     }
   }
 
   function setVolume(percent) {
-    // Clamp to the configured slider range (guards against stray messages).
     const clamped = Math.min(
       SETTINGS.volume.maxPercent,
       Math.max(SETTINGS.volume.minPercent, percent)
     );
     currentVolume = clamped / 100;
-    reportState(); // update the toolbar badge + this tab's remembered setting
+    reportState();
     engage();
-    if (masterGain) masterGain.gain.value = currentVolume; // RAW/BASE path gain
-    updateShaperCurve(); // SOFT-CLIP path: rebuild the curve with the new boost baked in
-    routeClip(); // engage the shaper only while boosting; bypass it (transparent) at 100%
-    routeLowCut(); // engage the high-pass only while boosting; exact passthrough at 100%+Flat
+    if (masterGain) glideParameter(masterGain.gain, currentVolume);
+    updateShaperCurve();
+    routeClip();
+    routeLowCut();
   }
 
-  // Load a named preset's gains into the faders (Flat/Voice/Bass). Unknown names fall
-  // back to Flat. This just seeds eqGains, then routes through the shared apply path.
   function applyPreset(name) {
     const preset = SETTINGS.presets[name] || SETTINGS.presets.default;
     eqGains = { ...preset };
     applyEq();
   }
 
-  // Set one or more EQ band gains from the popup's faders. Merges the given bands into
-  // the current gains (so moving one fader doesn't reset the other), clamps to range,
-  // and routes. The preset name is DERIVED afterwards — matching a preset re-lights its
-  // button, anything else reads as "custom".
+  // Merge the given band gains into the current ones, so moving one fader keeps the other.
   function setEq(gains) {
     if (!gains) return;
     for (const band of EQ_BANDS) {
@@ -864,22 +722,19 @@
     applyEq();
   }
 
-  // The shared tail for both applyPreset and setEq: bring the graph up, push the gains
-  // onto the nodes, and re-point the bypasses. The high-pass and soft clipper drop in
-  // whenever any band is lifted, and out again when every band is back to 0 dB.
   function applyEq() {
     engage();
     applyPresetNodes();
     routeLowCut();
     routeClip();
-    reportState(); // remember the tone for this tab (and refresh the badge)
+    reportState();
   }
 
   // --- State for the popup ----------------------------------------------
 
   function countMedia() {
     const media = [];
-    walk(document, (element) => media.push(element)); // pierces open shadow roots (see walk)
+    walk(document, (element) => media.push(element));
     let routable = 0;
     let blocked = 0;
     for (const element of media) {
@@ -896,9 +751,6 @@
       ok: true,
       volume: Math.round(currentVolume * 100),
       preset: currentPresetName(),
-      // The EQ, described entirely from this side so the popup builds its sliders from
-      // one source: the band list (key/label/frequency + current gain) and the shared
-      // dB range. Change a band or the range in SETTINGS/EQ_BANDS and the popup follows.
       eqBands: EQ_BANDS.map((b) => ({
         gainKey: b.gainKey,
         label: b.label,
@@ -906,7 +758,6 @@
         gainDb: eqGains[b.gainKey] || 0,
       })),
       eqRange: { minDb: SETTINGS.eq.minDb, maxDb: SETTINGS.eq.maxDb, stepDb: SETTINGS.eq.stepDb },
-      // Volume range comes from SETTINGS so the popup slider is sized from one place.
       minPercent: SETTINGS.volume.minPercent,
       maxPercent: SETTINGS.volume.maxPercent,
       defaultPercent: SETTINGS.volume.defaultPercent,
@@ -916,17 +767,11 @@
       softClipEnabled: clipEnabled,
       softClipAuto: SETTINGS.softClip.auto,
       compressorEnabled: compressorEnabled,
-      // The popup shows a hint when boost is engaged but the context isn't running yet
-      // (user needs to click the page), or when some media can't be boosted (cross-origin).
+      // Engaged but the context isn't running yet: the user needs to click the page.
       pending: engaged && contextState !== "running" && counts.routable > 0,
       blockedMedia: counts.blocked,
-      // "tricky" = a known streaming host whose DRM audio we PROBABLY can't route (see
-      // TRICKY_HOSTS); the popup turns this into a soft "MAY not work" warning.
-      tricky: isTrickyHost(),
-      // "drmBlocked" = PROVEN un-boostable: the DRM detector saw this tab attach an EME
-      // content key to a media element (see SETTINGS.drm). The popup turns this into the
-      // definitive "can't be boosted" warning with the reasons behind an info icon.
-      drmBlocked,
+      tricky: isTrickyHost(), // probably DRM (host guess)
+      drmBlocked, // definitely DRM (detector saw an EME key)
     };
   }
 
@@ -940,13 +785,13 @@
       case "set-preset":
         applyPreset(message.name);
         return Promise.resolve(getState());
-      case "set-eq": // { type: "set-eq", eq: { bassGainDb?, voiceBoostGainDb? } } — fader drag
+      case "set-eq":
         setEq(message.eq);
         return Promise.resolve(getState());
-      case "set-softclip": // { type: "set-softclip", enabled: true|false }
+      case "set-softclip":
         setSoftClipEnabled(message.enabled);
         return Promise.resolve(getState());
-      case "set-compressor": // { type: "set-compressor", enabled: true|false }
+      case "set-compressor":
         setCompressorEnabled(message.enabled);
         return Promise.resolve(getState());
       default:
@@ -954,38 +799,27 @@
     }
   });
 
-  // Console test hook, from the content script's devtools context:
-  //   __tabVolumeBooster.setSoftClip(false)    // hear the raw, clippable boost
-  //   __tabVolumeBooster.setSoftClip(true)     // smooth, protected again
-  //   __tabVolumeBooster.setCompressor(false)  // hear the raw, unlevelled dynamics
-  //   __tabVolumeBooster.setCompressor(true)   // even out loud/quiet swings (spiky lectures)
-  // Boost the slider first (the tails only run while engaged), then flip live to A/B.
+  // Console hooks for A/B testing (boost the slider first; the tails only run while engaged).
   window.__tabVolumeBooster = {
     setSoftClip: setSoftClipEnabled,
     isSoftClipEnabled: () => clipEnabled,
     setCompressor: setCompressorEnabled,
     isCompressorEnabled: () => compressorEnabled,
-    // Watch the adaptive threshold while tuning SETTINGS.compressor.marginDb: this reports the
-    // running-average level it's tracking and where the threshold currently sits (average + margin).
     compressorLevels: () => ({
       runningAverageDb,
       thresholdDb: compressor ? compressor.threshold.value : null,
       gainReductionDb: compressor ? compressor.reduction : null,
+      makeupCompensationDb: makeupCompensation ? linearToDb(makeupCompensation.gain.value) : null,
       crestFactorDb: runningPeakDb !== null && runningRmsDb !== null ? runningPeakDb - runningRmsDb : null,
       autoSoftClipActive: clipEnabled,
     }),
   };
 
-  // Restore this tab's last volume/preset (survives a refresh, which keeps the tab id).
-  // We run uniformly in EVERY frame — building a graph is cheap and silent (nothing routes
-  // until the context runs AND the frame has media, see wireAll), so an empty ad frame just
-  // holds an idle graph and every frame with media boosts together.
+  // Restore this tab's last volume/preset (a refresh keeps the tab id).
   function applySaved(saved) {
-    // Prefer the exact EQ gains (covers hand-tuned "custom" tones); fall back to the
-    // named preset for states saved before the faders existed. Either engages the graph.
     if (saved.eq) setEq(saved.eq);
-    else if (saved.preset) applyPreset(saved.preset);
-    setVolume(saved.volume); // applies the boost + refreshes badge
+    else if (saved.preset) applyPreset(saved.preset); // states saved before the faders existed
+    setVolume(saved.volume);
   }
 
   function restoreState() {
@@ -999,30 +833,26 @@
     Promise.resolve(pending)
       .then((saved) => {
         if (saved && typeof saved.volume === "number") {
-          applySaved(saved); // re-apply the tab's boost in this frame
+          applySaved(saved);
         } else {
-          reportState(); // nothing saved: keep this frame's badge entry in sync
+          reportState();
         }
       })
       .catch(() => reportState());
   }
 
-  // Listen for the MAIN-world DRM detector (drm-detector.js). Its message is the single
-  // 100%-proof signal that this tab's audio is DRM-locked and can never be routed through
-  // our graph; getState() forwards it so the popup shows the definitive warning. We only
-  // ever latch it true — a tab that once set up DRM stays flagged.
+  // Latch the MAIN-world DRM detector's report (see drm-detector.js).
   window.addEventListener("message", (event) => {
-    if (event.source !== window) return; // same-window messages only
+    if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== SETTINGS.drm.detectedMessageTag) return;
     drmBlocked = true;
   });
-  // The detector runs at document_start; we start listening at document_idle, so a page that
-  // locked its audio before now would have shouted to no one. Ask it to replay any detection.
+  // The detector runs earlier than us, so ask it to replay anything it already saw.
   try {
     window.postMessage({ source: SETTINGS.drm.queryMessageTag }, "*");
   } catch (err) {
-    /* postMessage unavailable during teardown — best effort */
+    /* best effort */
   }
 
   restoreState();
